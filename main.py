@@ -19,9 +19,9 @@ def optimization(optimizer,niterations,parameters,model, xl, img):
 
         chi2loss = torch.mean(torch.abs(img - final_output))
         reguloss = chi2loss*0.0
-        # reguloss += 1e-4*regu2(parameters, 0,img)
-        # reguloss += 1e-0*regu2(parameters, 1,img) 
-        # reguloss += 1e-1*regu2(parameters, 2,img)
+        reguloss += 1e-2*regu2(parameters, 0,img)
+        reguloss += 1e2*regu2(parameters, 1,img) 
+        reguloss += 1e1*regu2(parameters, 2,img)
 
         loss = chi2loss + reguloss
 
@@ -68,20 +68,42 @@ def regu2(out, ii,img):
     return torch.sum(torch.abs(output_smooth-mout[:,:,:,ii])**2.0)
 
 
+import cloud_model_torch as cmt 
+ll = np.linspace(6499.0, 6501.,201)
+ll0 = np.asarray([6500.0])
+x = [ll,ll0]
+
+p = np.array([0.5, 0.5, 100.0, 0.0, 10.0, -1, 0.2, 5.0, 20.0, 5.0, -5])
+p = np.concatenate((p[None,:], p[None,:]), axis=0)
+print(p.shape)
+pt = torch.from_numpy(p.astype(np.float32))
+print(pt.shape)
+test = cmt.model_synth(x, pt)
+print(test.shape)
+print(test)
+
+plt.figure(figsize=[9,5])
+plt.plot(ll, test[:])
+plt.savefig("testerino.png",bbox_inches='tight')
 
 
 
+
+
+
+'''
 # ====================================================================
 # Readind the data:
-tofit = np.nan_to_num(np.load('Gaussian_data.npy'))[:,:,50:-50]
-xl = np.nan_to_num(np.load('Gaussian_wl.npy'))
+tofit = np.nan_to_num(np.load('Gaussian_data.npy'))[:,:,50:-50] # in the shape, Nlambda, NX, NY
+xl = np.nan_to_num(np.load('Gaussian_wl.npy')) # Presumably this is just wavelength grid
 
 # Transform data into pytorch objects
 img = torch.from_numpy(np.array(tofit.astype(np.float32)))
 
 # ====================================================================
 # Defining the parameters of the model in the FOV:
-out = torch.ones(tofit.shape[1]*tofit.shape[2], 3)
+out = torch.ones(tofit.shape[1]*tofit.shape[2], 3) # (NX x NY) x NP cube
+# Initialize the starting values:
 out[:,0] = 1.0*torch.reshape(torch.log10(torch.abs(img[5,:,:])+1e-6), (1,tofit.shape[1]*tofit.shape[2]))[0,:] # amplitude
 out[:,1] = 0.0230 # sigma
 out[:,2] = -0.0063 # center
@@ -91,12 +113,12 @@ out.requires_grad = True
 # Send all the info to the optimization module inside the utils.py file:
 optimizer = torch.optim.Adam([out], lr=1e-3)
 niter = 200
-mymodel = Gaussian_model
+mymodel = Gaussian_model # Model from the above
 outplot, final_output = optimization(optimizer=optimizer,niterations=niter,
                                         parameters=out,model=mymodel,xl=xl,img=img)
 
 # ====================================================================
-name = 'fit_torch_regu'
+name = 'fit_torch_regu_on'
 
 fig, (ax1, ax2, ax3) = plt.subplots(1, 3, sharey=True, sharex=True, figsize=(20/2,10/2))
 im = ax1.imshow(10.**outplot[:,:,0].T,cmap='gray',interpolation='nearest',vmin=10,vmax=200) #
@@ -110,4 +132,4 @@ cbar = add_colorbar(im2, aspect=35)
 im3 = ax3.imshow(1e3*outplot[:,:,2].T,cmap='bwr',interpolation='nearest',vmin=1e3*-0.03,vmax=1e3*+0.03)#,
 ax3.set_title('Center [mA]')
 add_colorbar(im3, aspect=30)
-plt.savefig(name+'.png',bbox_inches='tight',dpi=600)
+plt.savefig(name+'.png',bbox_inches='tight',dpi=600)'''

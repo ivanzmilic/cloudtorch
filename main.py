@@ -5,6 +5,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 from utils import *
+import sys
+from astropy.io import fits
+import cloud_model_torch as cmt 
 
 # ====================================================================
 def optimization(optimizer,niterations,parameters,model, xl, img):
@@ -18,12 +21,12 @@ def optimization(optimizer,niterations,parameters,model, xl, img):
         parameters, final_output = evaluate(parameters, xl, img, model)
 
         chi2loss = torch.mean(torch.abs(img - final_output))
-        reguloss = chi2loss*0.0
-        reguloss += 1e-2*regu2(parameters, 0,img)
-        reguloss += 1e2*regu2(parameters, 1,img) 
-        reguloss += 1e1*regu2(parameters, 2,img)
+        #reguloss = chi2loss*0.0
+        #reguloss += 1e-2*regu2(parameters, 0,img)
+        #reguloss += 1e2*regu2(parameters, 1,img) 
+        #reguloss += 1e1*regu2(parameters, 2,img)
 
-        loss = chi2loss + reguloss
+        #loss = chi2loss + reguloss
 
         loss.backward()              #calculate gradients
         optimizer.step()             #step fordward
@@ -31,8 +34,8 @@ def optimization(optimizer,niterations,parameters,model, xl, img):
         t.set_postfix({'loss': loss.item(), 'chi2loss': chi2loss.item(), 'reguloss': reguloss.item()})
 
     parameters, final_output = evaluate(parameters,xl,img, model)
-    outplot = parameters.detach().numpy().reshape(img.shape[1],img.shape[2],3)
-    return outplot, final_output
+    outparams = parameters.detach().numpy().reshape(img.shape[0],img.shape[1],11)
+    return outparams, final_output
 
 
 
@@ -42,6 +45,11 @@ def Gaussian_model(x, params):
     sigma = torch.abs(params[:,1])
     return torch.pow(10,params[:,0])*torch.exp(-(x-params[:,2])**2./(2*(sigma+1e-6)**2.))
 
+# ========================================================================================================
+
+def cloud_model(x, params):
+    x = torch.from_numpy(np.array(x.astype(np.float32)))
+    return cmt.model_synth(x, params)
 
 # ====================================================================
 def evaluate(out,xl,img,model):
@@ -68,8 +76,8 @@ def regu2(out, ii,img):
     return torch.sum(torch.abs(output_smooth-mout[:,:,:,ii])**2.0)
 
 
-import cloud_model_torch as cmt 
-ll = np.linspace(6499.0, 6501.,201)
+
+'''ll = np.linspace(6499.0, 6501.,201)
 ll0 = np.asarray([6500.0])
 x = [ll,ll0]
 
@@ -83,43 +91,54 @@ print(test.shape)
 print(test)
 
 plt.figure(figsize=[9,5])
-plt.plot(ll, test[:])
-plt.savefig("testerino.png",bbox_inches='tight')
+plt.plot(ll, test[0,:])
+plt.plot(ll, test[1,:])
+plt.savefig("testerino.png",bbox_inches='tight')'''
 
 
-
-
-
-
-'''
-# ====================================================================
+# ================================================================================================================
 # Readind the data:
-tofit = np.nan_to_num(np.load('Gaussian_data.npy'))[:,:,50:-50] # in the shape, Nlambda, NX, NY
-xl = np.nan_to_num(np.load('Gaussian_wl.npy')) # Presumably this is just wavelength grid
+tofit = fits.open(sys.argv[1])[0].data[:,:,:,100:500]
+xl = fits.open(sys.argv[1])[1].data[100:500]
+ll0 = np.asarray([6500.0])
+xl = [xl,ll0]
+xl = np.asarray(xl)
+print (xl)
 
-# Transform data into pytorch objects
-img = torch.from_numpy(np.array(tofit.astype(np.float32)))
+# Transform data into pytorch object:
+tofit_pt = torch.from_numpy(np.array(tofit.astype(np.float32)))
 
-# ====================================================================
+# ================================================================================================================
 # Defining the parameters of the model in the FOV:
-out = torch.ones(tofit.shape[1]*tofit.shape[2], 3) # (NX x NY) x NP cube
+pars = torch.ones(tofit.shape[0]*tofit.shape[1], 11) # (NX x NY) x NP cube
 # Initialize the starting values:
-out[:,0] = 1.0*torch.reshape(torch.log10(torch.abs(img[5,:,:])+1e-6), (1,tofit.shape[1]*tofit.shape[2]))[0,:] # amplitude
-out[:,1] = 0.0230 # sigma
-out[:,2] = -0.0063 # center
-out.requires_grad = True
+pars[:,0] = 0.5 #S0
+pars[:,1] = 0.5 #S1
+pars[:,2] = 100 # eta
+pars[:,3] = 2.0 # los velocity
+pars[:,4] = 10.0 # doppler width 
+pars[:,5] = -1.0 # log a
+# Cloud: 
+pars[:,6] = 0.2 # S
+pars[:,7] = 5.0 # tau
+pars[:,8] = -2.0 # los velocity
+pars[:,9] = 5.0 # Doppler width
+pars[:,10] = -5.0 # log a
+
+pars.requires_grad = True
 
 # ====================================================================
 # Send all the info to the optimization module inside the utils.py file:
-optimizer = torch.optim.Adam([out], lr=1e-3)
-niter = 200
-mymodel = Gaussian_model # Model from the above
+optimizer = torch.optim.Adam([pars], lr=1e-3)
+niter = 1
+mymodel = cloud_model # Model from the above
 outplot, final_output = optimization(optimizer=optimizer,niterations=niter,
-                                        parameters=out,model=mymodel,xl=xl,img=img)
+                                        parameters=pars,model=mymodel,xl=xl,img=tofit)
 
 # ====================================================================
-name = 'fit_torch_regu_on'
+#name = 'fit_torch_regu_on'
 
+'''
 fig, (ax1, ax2, ax3) = plt.subplots(1, 3, sharey=True, sharex=True, figsize=(20/2,10/2))
 im = ax1.imshow(10.**outplot[:,:,0].T,cmap='gray',interpolation='nearest',vmin=10,vmax=200) #
 ax1.set_title('Amplitude [counts]')

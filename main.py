@@ -18,24 +18,32 @@ def optimization(optimizer,niterations,parameters,model, xl, img):
     t = trange(niterations, leave=True)
     for loop in t:
         optimizer.zero_grad()        #reset gradients
-        parameters, final_output = evaluate(parameters, xl, img, model)
+        img_syn = cloud_model(xl, parameters)
+        img_syn = img_syn.reshape(img.shape[0], img.shape[1], -1)
+        chi2loss = torch.std(torch.from_numpy(img) - img_syn)
+        
+        #parameters, img_syn = evaluate(parameters, xl, img, model)
 
-        chi2loss = torch.mean(torch.abs(img - final_output))
-        #reguloss = chi2loss*0.0
+        #chi2loss = torch.mean(torch.abs(img - img.syn))
+        reguloss = chi2loss*0.0
         #reguloss += 1e-2*regu2(parameters, 0,img)
         #reguloss += 1e2*regu2(parameters, 1,img) 
         #reguloss += 1e1*regu2(parameters, 2,img)
 
-        #loss = chi2loss + reguloss
+        loss = chi2loss + reguloss
 
         loss.backward()              #calculate gradients
         optimizer.step()             #step fordward
 
         t.set_postfix({'loss': loss.item(), 'chi2loss': chi2loss.item(), 'reguloss': reguloss.item()})
 
-    parameters, final_output = evaluate(parameters,xl,img, model)
-    outparams = parameters.detach().numpy().reshape(img.shape[0],img.shape[1],11)
-    return outparams, final_output
+    #parameters, final_output = evaluate(parameters,xl,img, model)
+    #outparams = parameters.detach().numpy().reshape(img.shape[0],img.shape[1],11)
+    parameters = parameters.reshape(img.shape[0],img.shape[1],-1)
+    parameters = parameters.detach().numpy()
+    img_syn = img_syn.detach().numpy()
+    return parameters, img_syn
+    #return outparams, final_output
 
 
 
@@ -48,14 +56,15 @@ def Gaussian_model(x, params):
 # ========================================================================================================
 
 def cloud_model(x, params):
-    x = torch.from_numpy(np.array(x.astype(np.float32)))
+    #x = torch.from_numpy(np.array(x.astype(np.float32)))
     return cmt.model_synth(x, params)
 
 # ====================================================================
-def evaluate(out,xl,img,model):
+def evaluate(parameters,xl,img,model):
     final_output = torch.tensor(())
-    for ii in range(xl.shape[0]):
-        final_output = torch.cat((final_output, model(xl[ii], out)), 0)
+    
+    #for ii in range(out.shape[0]):
+    final_output = torch.cat((final_output, model(xl, parameters[ii])), 0)
     final_output = torch.reshape(final_output, (img.shape[0],img.shape[1],img.shape[2]))
     return out, final_output
 
@@ -98,15 +107,20 @@ plt.savefig("testerino.png",bbox_inches='tight')'''
 
 # ================================================================================================================
 # Readind the data:
-tofit = fits.open(sys.argv[1])[0].data[:,:,:,100:500]
+
+tofit = fits.open(sys.argv[1])[0].data[50:60,50:60,0,100:500]
+Iqs = np.mean(tofit[:,:,-20])
+print("info::normalizing the input data to the value: ", Iqs)
+tofit /= Iqs
+tofit = tofit.astype(float)
+print("info::the input observations have the shape:", tofit.shape)
 xl = fits.open(sys.argv[1])[1].data[100:500]
-ll0 = np.asarray([6500.0])
+ll0 = np.asarray([np.mean(xl)])
 xl = [xl,ll0]
-xl = np.asarray(xl)
-print (xl)
 
 # Transform data into pytorch object:
 tofit_pt = torch.from_numpy(np.array(tofit.astype(np.float32)))
+
 
 # ================================================================================================================
 # Defining the parameters of the model in the FOV:
@@ -129,11 +143,13 @@ pars.requires_grad = True
 
 # ====================================================================
 # Send all the info to the optimization module inside the utils.py file:
-optimizer = torch.optim.Adam([pars], lr=1e-3)
-niter = 1
+optimizer = torch.optim.Adam([pars], lr=1e-2)
+niter = 1000
 mymodel = cloud_model # Model from the above
-outplot, final_output = optimization(optimizer=optimizer,niterations=niter,
+parameters, fits = optimization(optimizer=optimizer,niterations=niter,
                                         parameters=pars,model=mymodel,xl=xl,img=tofit)
+
+
 
 # ====================================================================
 #name = 'fit_torch_regu_on'

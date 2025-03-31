@@ -84,8 +84,8 @@ def model_synth(x, p):
     ll = x[0]
     ll0 = x[1]
 
-    #ll = torch.from_numpy(np.array(ll.astype(np.float32)))
-    #ll0 = torch.from_numpy(np.array(ll0.astype(np.float32)))
+    ll = torch.from_numpy(np.array(ll.astype(np.float32)))
+    ll0 = torch.from_numpy(np.array(ll0.astype(np.float32)))
     
     spectrum_atmos = me(p[:,0], p[:,1], p[:,2], p[:,3], p[:,4], p[:,5], ll0, ll)
     

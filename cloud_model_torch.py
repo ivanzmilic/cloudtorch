@@ -31,22 +31,10 @@ def fvoigt(damp, vv):
 
     return [h, f]
 
-'''def V(x, alpha, gamma):
-    """
-    Return the Voigt line shape at x with Lorentzian component HWHM gamma
-    and Gaussian component HWHM alpha.
-
-    """
-    sigma = alpha / np.sqrt(2 * np.log(2))
-
-    return np.real(wofz((x + 1j*gamma)/sigma/np.sqrt(2))) / sigma /np.sqrt(2*np.pi)
-
-def voigt(center,doppler,damp,ll):
-    xx = (ll - center)/doppler
-    return V(xx,1.0,damp)'''
-
-
 # ME - underlying atmosphere:
+# vectorized
+# first coordinate - number of the pixel
+# second coordinate - wavelength
 def me(S1, S2, eta, vlos, deltav, loga, ll0, ll):
     
     center = ll0 * (1.0 + vlos / 3E5)
@@ -93,8 +81,6 @@ def model_synth(x, p):
     
     return spectrum_final
 
-#let's try now scipy.optimize.minimize
-
 # just a normal chi2
 def chi2(p, x, y, ll0, error):
     
@@ -104,11 +90,11 @@ def chi2(p, x, y, ll0, error):
     
     y_model = model_synth(p,ll0, x)
     
-    chi2 = np.sum(((y_model - y) / error)**2)
+    chi2 = np.sum(((y_model - y) / error)**2.0)
     
     return chi2
 
-# chi2 trying to penalize the optical depth of the 
+# chi2 trying to penalize --- 
 
 def chi2_r1(p, x, y, ll0, error):
     

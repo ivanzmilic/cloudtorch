@@ -108,7 +108,7 @@ plt.savefig("testerino.png",bbox_inches='tight')'''
 # ================================================================================================================
 # Readind the data:
 
-tofit = fits.open(sys.argv[1])[0].data[50:60,50:60,0,100:500]
+tofit = fits.open(sys.argv[1])[0].data[59:60,59:60,0,100:500]
 Iqs = np.mean(tofit[:,:,-20])
 print("info::normalizing the input data to the value: ", Iqs)
 tofit /= Iqs
@@ -128,7 +128,7 @@ pars = torch.ones(tofit.shape[0]*tofit.shape[1], 11) # (NX x NY) x NP cube
 # Initialize the starting values:
 pars[:,0] = 0.5 #S0
 pars[:,1] = 0.5 #S1
-pars[:,2] = 100 # eta
+pars[:,2] = 5000 # eta
 pars[:,3] = 2.0 # los velocity
 pars[:,4] = 10.0 # doppler width 
 pars[:,5] = -1.0 # log a
@@ -143,10 +143,10 @@ pars.requires_grad = True
 
 # ====================================================================
 # Send all the info to the optimization module inside the utils.py file:
-optimizer = torch.optim.Adam([pars], lr=1e-2)
-niter = 1000
+optimizer = torch.optim.Adam([pars], lr=8e-2)
+niter = 5000
 mymodel = cloud_model # Model from the above
-parameters, fits = optimization(optimizer=optimizer,niterations=niter,
+parameters, fit_spectra = optimization(optimizer=optimizer,niterations=niter,
                                         parameters=pars,model=mymodel,xl=xl,img=tofit)
 
 

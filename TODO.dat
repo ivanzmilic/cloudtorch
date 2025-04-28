@@ -1,0 +1,8 @@
+Meeting 28/04: 
+
+- Implement priors or simple regularization penalties for going over a certain quantity 
+
+- Try inversion on a known value 
+
+- Try inversion with the values that you obtained using np code as an initial solution (basically check if the values synthesized by the two codes agee)
+

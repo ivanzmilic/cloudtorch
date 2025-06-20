@@ -20,7 +20,7 @@ def optimization(optimizer,niterations,parameters,model, xl, img):
         optimizer.zero_grad()        #reset gradients
         img_syn = cloud_model(xl, parameters)
         img_syn = img_syn.reshape(img.shape[0], img.shape[1], -1)
-        chi2loss = torch.std(torch.from_numpy(img) - img_syn)
+        chi2loss = torch.sum((torch.from_numpy(img) - img_syn)**2.0)
         
         #parameters, img_syn = evaluate(parameters, xl, img, model)
 
@@ -108,7 +108,7 @@ plt.savefig("testerino.png",bbox_inches='tight')'''
 # ================================================================================================================
 # Readind the data:
 
-tofit = fits.open(sys.argv[1])[0].data[59:60,59:60,0,100:500]
+tofit = fits.open(sys.argv[1])[0].data[20:30,20:30,0,100:500]
 Iqs = np.mean(tofit[:,:,-20])
 print("info::normalizing the input data to the value: ", Iqs)
 tofit /= Iqs
@@ -128,7 +128,7 @@ pars = torch.ones(tofit.shape[0]*tofit.shape[1], 11) # (NX x NY) x NP cube
 # Initialize the starting values:
 pars[:,0] = 0.5 #S0
 pars[:,1] = 0.5 #S1
-pars[:,2] = 5000 # eta
+pars[:,2] = 5 # eta in units if 1000s
 pars[:,3] = 2.0 # los velocity
 pars[:,4] = 10.0 # doppler width 
 pars[:,5] = -1.0 # log a
@@ -144,10 +144,30 @@ pars.requires_grad = True
 # ====================================================================
 # Send all the info to the optimization module inside the utils.py file:
 optimizer = torch.optim.Adam([pars], lr=8e-2)
-niter = 5000
+niter = int(sys.argv[2])
 mymodel = cloud_model # Model from the above
 parameters, fit_spectra = optimization(optimizer=optimizer,niterations=niter,
                                         parameters=pars,model=mymodel,xl=xl,img=tofit)
+
+
+
+plt.ion()
+i = 5
+j = 5
+plt.clf()
+plt.plot(tofit[i,j])
+plt.plot(fit_spectra[i,j])
+
+loss = np.std(tofit - fit_spectra)
+
+print (loss)
+
+chisq = np.sum((tofit - fit_spectra)**2.0, axis=2) / 400.0
+print (chisq[0,0])
+
+
+
+
 
 
 

@@ -44,7 +44,8 @@ def me(S1, S2, eta, vlos, deltav, loga, ll0, ll):
     [H, F] = fvoigt(a[:, None], xx)
     profile = H
     
-    return S1[:,None] + S2[:,None] / (1.0 + eta[:,None] * profile)
+
+    return S1[:,None] + S2[:,None] / (1.0 + eta[:,None] * profile * 1000.0)
 
 # cloud that hangs above the atmosphere:
 def cloud(S, deltatau, vlos, deltav, loga, ll0, ll, I_incoming):

@@ -19,8 +19,8 @@ def optimization(optimizer,niterations,parameters,model, xl, img):
 
         chi2loss = torch.mean(torch.abs(img - final_output))
         reguloss = chi2loss*0.0
-        reguloss += 1e-2*regu2(parameters, 0,img)
-        reguloss += 1e2*regu2(parameters, 1,img) 
+        reguloss += 1e-4*regu2(parameters, 0,img)
+        reguloss += 1e0*regu2(parameters, 1,img) 
         reguloss += 1e1*regu2(parameters, 2,img)
 
         loss = chi2loss + reguloss
@@ -96,7 +96,7 @@ outplot, final_output = optimization(optimizer=optimizer,niterations=niter,
                                         parameters=out,model=mymodel,xl=xl,img=img)
 
 # ====================================================================
-name = 'fit_torch_regu_on'
+name = 'fit_torch_regu_'
 
 fig, (ax1, ax2, ax3) = plt.subplots(1, 3, sharey=True, sharex=True, figsize=(20/2,10/2))
 im = ax1.imshow(10.**outplot[:,:,0].T,cmap='gray',interpolation='nearest',vmin=10,vmax=200) #

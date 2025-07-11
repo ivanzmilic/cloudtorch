@@ -82,6 +82,22 @@ def model_synth(x, p):
     
     return spectrum_final
 
+def model_synth_2clouds(x, p):
+
+    ll = x[0]
+    ll0 = x[1]
+
+    ll = torch.from_numpy(np.array(ll.astype(np.float32)))
+    ll0 = torch.from_numpy(np.array(ll0.astype(np.float32)))
+    
+    spectrum_atmos = me(p[:,0], p[:,1], p[:,2], p[:,3], p[:,4], p[:,5], ll0, ll)
+    
+    spectrum_ch = cloud(p[:,6], p[:,7], p[:,8], p[:,9], p[:,10] ,ll0, ll, spectrum_atmos)
+
+    spectrum_final = cloud(p[:,11], p[:,12], p[:,13], p[:,14], p[:,15] ,ll0, ll, spectrum_ch)
+    
+    return spectrum_final
+
 # just a normal chi2
 def chi2(p, x, y, ll0, error):
     

@@ -8,6 +8,8 @@ from utils import *
 import sys
 from astropy.io import fits
 import cloud_model_torch as cmt 
+import matplotlib
+matplotlib.use('agg')
 
 # ====================================================================
 def optimization(optimizer,niterations,parameters,model, xl, img):
@@ -20,15 +22,18 @@ def optimization(optimizer,niterations,parameters,model, xl, img):
         optimizer.zero_grad()        #reset gradients
         img_syn = cloud_model(xl, parameters)
         img_syn = img_syn.reshape(img.shape[0], img.shape[1], -1)
-        chi2loss = torch.sum((torch.from_numpy(img) - img_syn)**2.0)
+        chi2loss = torch.mean(torch.sum((torch.from_numpy(img) - img_syn)**2.0))
         
         #parameters, img_syn = evaluate(parameters, xl, img, model)
 
         #chi2loss = torch.mean(torch.abs(img - img.syn))
         reguloss = chi2loss*0.0
-        #reguloss += 1e-2*regu2(parameters, 0,img)
-        #reguloss += 1e2*regu2(parameters, 1,img) 
-        #reguloss += 1e1*regu2(parameters, 2,img)
+        reguloss += 1e1*regu2(parameters, 0,img)
+        reguloss += 1e1*regu2(parameters, 1,img) 
+        reguloss += 1e0-1*regu2(parameters, 2,img)
+        reguloss += 5e-2*regu2(parameters, 3,img)
+        reguloss += 5e-2*regu2(parameters, 4,img)
+        #reguloss += 1e1*regu2(parameters, 5,img)
 
         loss = chi2loss + reguloss
 
@@ -57,7 +62,8 @@ def Gaussian_model(x, params):
 
 def cloud_model(x, params):
     #x = torch.from_numpy(np.array(x.astype(np.float32)))
-    return cmt.model_synth(x, params)
+    #return cmt.model_synth(x, params)
+    return cmt.model_synth_2clouds(x, params)
 
 # ====================================================================
 def evaluate(parameters,xl,img,model):
@@ -80,7 +86,7 @@ def regu2(out, ii,img):
                             [0.5,   1.0, 0.5]])
     weights = weights/weights.sum()
     weights = weights.view(1, 1, 3, 3).repeat(1, nb_channels, 1, 1)
-    mout = torch.reshape(out, (1,img.shape[1],img.shape[2],3))
+    mout = torch.reshape(out, (1,img.shape[0],img.shape[1],16))
     output_smooth = F.conv2d(m(mout[:,:,:,ii]), weights,padding='valid')
     return torch.sum(torch.abs(output_smooth-mout[:,:,:,ii])**2.0)
 
@@ -108,7 +114,7 @@ plt.savefig("testerino.png",bbox_inches='tight')'''
 # ================================================================================================================
 # Readind the data:
 
-tofit = fits.open(sys.argv[1])[0].data[20:30,20:30,0,100:500]
+tofit = fits.open(sys.argv[1])[0].data[15:125,15:140,0,100:500]
 Iqs = np.mean(tofit[:,:,-20])
 print("info::normalizing the input data to the value: ", Iqs)
 tofit /= Iqs
@@ -124,7 +130,7 @@ tofit_pt = torch.from_numpy(np.array(tofit.astype(np.float32)))
 
 # ================================================================================================================
 # Defining the parameters of the model in the FOV:
-pars = torch.ones(tofit.shape[0]*tofit.shape[1], 11) # (NX x NY) x NP cube
+pars = torch.ones(tofit.shape[0]*tofit.shape[1], 16) # (NX x NY) x NP cube
 # Initialize the starting values:
 pars[:,0] = 0.5 #S0
 pars[:,1] = 0.5 #S1
@@ -133,11 +139,18 @@ pars[:,3] = 2.0 # los velocity
 pars[:,4] = 10.0 # doppler width 
 pars[:,5] = -1.0 # log a
 # Cloud: 
-pars[:,6] = 0.2 # S
+pars[:,6] = 0.3 # S
 pars[:,7] = 5.0 # tau
 pars[:,8] = -2.0 # los velocity
 pars[:,9] = 5.0 # Doppler width
 pars[:,10] = -5.0 # log a
+
+# Cloud: 
+pars[:,11] = 0.1 # S
+pars[:,12] = 1.0 # tau
+pars[:,13] = 10.0 # los velocity
+pars[:,14] = 5.0 # Doppler width
+pars[:,15] = -5.0 # log a
 
 pars.requires_grad = True
 
@@ -149,21 +162,30 @@ mymodel = cloud_model # Model from the above
 parameters, fit_spectra = optimization(optimizer=optimizer,niterations=niter,
                                         parameters=pars,model=mymodel,xl=xl,img=tofit)
 
-
-
-plt.ion()
-i = 5
-j = 5
-plt.clf()
-plt.plot(tofit[i,j])
-plt.plot(fit_spectra[i,j])
-
-loss = np.std(tofit - fit_spectra)
-
-print (loss)
-
 chisq = np.sum((tofit - fit_spectra)**2.0, axis=2) / 400.0
-print (chisq[0,0])
+print (np.mean(chisq[0,0]))
+
+plt.figure(figsize=[16,14])
+for i in range(0,16):
+    plt.subplot(4,4,i+1)
+    plt.imshow(parameters[:,:,i].T, origin='lower')
+    plt.colorbar()
+
+#plt.subplot(3,4,12)
+#plt.imshow(np.log10(chisq).T, origin='lower')
+#plt.colorbar()
+
+
+plt.savefig("debug.png")
+plt.close('all')
+
+#plt.ion()
+#i = 5
+#j = 5
+#plt.clf()
+#plt.plot(tofit[i,j])
+#plt.plot(fit_spectra[i,j])
+
 
 
 

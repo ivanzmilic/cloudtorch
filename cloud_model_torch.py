@@ -1,17 +1,13 @@
 import numpy as np
-import matplotlib.pyplot as plt 
-from astropy.io import fits
-from scipy.special import wofz
-from scipy.optimize import minimize
 import torch
 
-# This starts as a set of functions identical to cloud_model.py, BUT
-# everything needs to be cast in torch. 
-# Should be extremely easy, except for the Voig function
-# But CJDB has a good approximation - taken from: https://github.com/aasensio/neural_fields/blob/main/utils.py#L174
 
+# ====================================================================
 def fvoigt(damp, vv):
-
+    """
+    Voigt function approximation using torch tensors.
+    Based on: https://github.com/aasensio/neural_fields/blob/main/utils.py#L174
+    """
     A = [122.607931777104326, 214.382388694706425, 181.928533092181549,
          93.155580458138441, 30.180142196210589, 5.912626209773153,
          0.564189583562615]
@@ -20,10 +16,9 @@ def fvoigt(damp, vv):
          348.703917719495792, 170.354001821091472, 53.992906912940207,
          10.479857114260399, 1.]
 
-
     z = damp - torch.abs(vv) * 1j
 
-    Z = ((((((A[6] * z + A[5]) * z + A[4]) * z + A[3]) * z + A[2]) * z + A[1]) * z + A[0]) /\
+    Z = ((((((A[6] * z + A[5]) * z + A[4]) * z + A[3]) * z + A[2]) * z + A[1]) * z + A[0]) / \
         (((((((z + B[6]) * z + B[5]) * z + B[4]) * z + B[3]) * z + B[2]) * z + B[1]) * z + B[0])
 
     h = Z.real
@@ -31,207 +26,129 @@ def fvoigt(damp, vv):
 
     return [h, f]
 
-# ME - underlying atmosphere:
-# vectorized
-# first coordinate - number of the pixel
-# second coordinate - wavelength
+
+# ====================================================================
 def me(S1, S2, eta, vlos, deltav, loga, ll0, ll):
+    """
+    ME - underlying atmosphere model.
+    Vectorized implementation.
     
+    Args:
+        S1, S2, eta, vlos, deltav, loga, ll0: atmosphere parameters
+        ll: wavelength array
+    
+    Returns:
+        Synthetic spectrum from the underlying atmosphere
+    """
     center = ll0 * (1.0 + vlos / 3E5)
-    doppler  = deltav/3E5 * ll0
+    doppler = deltav / 3E5 * ll0
     a = 10.0 ** loga
-    xx = (ll[None,:] - center[:,None])/doppler[:,None]
-    [H, F] = fvoigt(a[:, None], xx)
+    xx = (ll[None, :] - center[:, None]) / doppler[:, None]
+    H, F = fvoigt(a[:, None], xx)
     profile = H
     
+    return S1[:, None] + S2[:, None] / (1.0 + eta[:, None] * profile * 1000.0)
 
-    return S1[:,None] + S2[:,None] / (1.0 + eta[:,None] * profile * 1000.0)
 
-# cloud that hangs above the atmosphere:
+# ====================================================================
 def cloud(S, deltatau, vlos, deltav, loga, ll0, ll, I_incoming):
+    """
+    Cloud model that hangs above the atmosphere.
     
-    center = ll0 * (1.0 + vlos / 3E5) # line center in Angstroms, shifted due to velocity
-    doppler  = deltav/3E5 * ll0 # Doppler width in angstroms
+    Args:
+        S: source function
+        deltatau: optical depth
+        vlos: line-of-sight velocity
+        deltav: velocity dispersion
+        loga: damping parameter (log scale)
+        ll0: line center wavelength
+        ll: wavelength array
+        I_incoming: incoming intensity
+    
+    Returns:
+        Synthetic spectrum with cloud absorption
+    """
+    center = ll0 * (1.0 + vlos / 3E5)  # line center in Angstroms, shifted due to velocity
+    doppler = deltav / 3E5 * ll0  # Doppler width in angstroms
     
     a = 10.0 ** loga
-    xx = (ll[None,:] - center[:,None])/doppler[:,None]
-    [H, F] = fvoigt(a[:, None], xx)
+    xx = (ll[None, :] - center[:, None]) / doppler[:, None]
+    H, F = fvoigt(a[:, None], xx)
     profile = H
     
-    tau_lambda = deltatau[:,None] * profile
+    tau_lambda = deltatau[:, None] * profile
     
-    return I_incoming * torch.exp(-tau_lambda) + S[:,None] * (1.0 - torch.exp(-tau_lambda))
+    return I_incoming * torch.exp(-tau_lambda) + S[:, None] * (1.0 - torch.exp(-tau_lambda))
 
-# full model
-#def Gaussian_model(x, params):
-#    x = torch.from_numpy(np.array(x.astype(np.float32)))
-#    sigma = torch.abs(params[:,1])
-#    return torch.pow(10,params[:,0])*torch.exp(-(x-params[:,2])**2./(2*(sigma+1e-6)**2.))
 
+# ====================================================================
 def model_synth(x, p):
-
-    ll = x[0]
-    ll0 = x[1]
-
-    ll = torch.from_numpy(np.array(ll.astype(np.float32)))
-    ll0 = torch.from_numpy(np.array(ll0.astype(np.float32)))
+    """
+    Full model synthesis with one cloud layer.
     
-    spectrum_atmos = me(p[:,0], p[:,1], p[:,2], p[:,3], p[:,4], p[:,5], ll0, ll)
+    Args:
+        x: [wavelength_array, line_center_array]
+        p: parameter array with shape (n_pixels, 11)
+           [S1, S2, eta, vlos_atmos, deltav_atmos, loga_atmos, 
+            S_cloud, deltatau, vlos_cloud, deltav_cloud, loga_cloud]
     
-    spectrum_final = cloud(p[:,6], p[:,7], p[:,8], p[:,9], p[:,10] ,ll0, ll, spectrum_atmos)
+    Returns:
+        Synthetic spectrum
+    """
+    ll, ll0 = x
+    
+    ll = torch.from_numpy(ll.astype(np.float32))
+    ll0 = torch.from_numpy(ll0.astype(np.float32))
+    
+    # Same device:
+    if ll.device != p.device:
+        ll = ll.to(p.device)
+    if ll0.device != p.device:
+        ll0 = ll0.to(p.device)
+    
+
+    # Atmosphere spectrum
+    spectrum_atmos = me(p[:, 0], p[:, 1], p[:, 2], p[:, 3], p[:, 4], p[:, 5], ll0, ll)
+    
+    # Cloud spectrum
+    spectrum_final = cloud(p[:, 6], p[:, 7], p[:, 8], p[:, 9], p[:, 10], ll0, ll, spectrum_atmos)
     
     return spectrum_final
 
+
+# ====================================================================
 def model_synth_2clouds(x, p):
-
-    ll = x[0]
-    ll0 = x[1]
-
-    ll = torch.from_numpy(np.array(ll.astype(np.float32)))
-    ll0 = torch.from_numpy(np.array(ll0.astype(np.float32)))
+    """
+    Full model synthesis with two cloud layers.
     
-    spectrum_atmos = me(p[:,0], p[:,1], p[:,2], p[:,3], p[:,4], p[:,5], ll0, ll)
+    Args:
+        x: [wavelength_array, line_center_array]
+        p: parameter array with shape (n_pixels, 16)
+           [S1, S2, eta, vlos_atmos, deltav_atmos, loga_atmos,
+            S_cloud1, deltatau1, vlos_cloud1, deltav_cloud1, loga_cloud1,
+            S_cloud2, deltatau2, vlos_cloud2, deltav_cloud2, loga_cloud2]
     
-    spectrum_ch = cloud(p[:,6], p[:,7], p[:,8], p[:,9], p[:,10] ,ll0, ll, spectrum_atmos)
-
-    spectrum_final = cloud(p[:,11], p[:,12], p[:,13], p[:,14], p[:,15] ,ll0, ll, spectrum_ch)
+    Returns:
+        Synthetic spectrum
+    """
+    ll, ll0 = x
+    
+    ll = torch.from_numpy(ll.astype(np.float32))
+    ll0 = torch.from_numpy(ll0.astype(np.float32))
+    
+    # Same device:
+    if ll.device != p.device:
+        ll = ll.to(p.device)
+    if ll0.device != p.device:
+        ll0 = ll0.to(p.device)
+    
+    # Atmosphere spectrum
+    spectrum_atmos = me(p[:, 0], p[:, 1], p[:, 2], p[:, 3], p[:, 4], p[:, 5], ll0, ll)
+    
+    # First cloud layer
+    spectrum_cloud1 = cloud(p[:, 6], p[:, 7], p[:, 8], p[:, 9], p[:, 10], ll0, ll, spectrum_atmos)
+    
+    # Second cloud layer
+    spectrum_final = cloud(p[:, 11], p[:, 12], p[:, 13], p[:, 14], p[:, 15], ll0, ll, spectrum_cloud1)
     
     return spectrum_final
-
-# just a normal chi2
-def chi2(p, x, y, ll0, error):
-    
-    #x is ll
-    #y are the observed stokes 
-    #uncertanties in y
-    
-    y_model = model_synth(p,ll0, x)
-    
-    chi2 = np.sum(((y_model - y) / error)**2.0)
-    
-    return chi2
-
-# chi2 trying to penalize --- 
-
-def chi2_r1(p, x, y, ll0, error):
-    
-    #x is ll
-    #y are the observed stokes 
-    #uncertanties in y
-    
-    y_model = model_synth(p,ll0, x)
-    
-    chi2 = np.sum(((y_model - y) / error)**2)
-    
-    return chi2
-
-def invert_simple_py(ll, spectrum_to_fit, ll0, noise):
-	
-	# we are going to hard code the initial parameters and the bounds for the moment:
-	
-	# bounds:
-	
-	b=[(0.0,2.0), (-2.0,2.0),(80,120.), (-5,5),(1.0,20.0),(-4,1),(0, 2.0),(0,100),(-150, 150),(1.0, 15.0),(-4, -1)]
-	params = np.array([0.10, 0.7, 100.0, 0.0, 2.0, -1, 0.1, 10.0, -30.0, 2.0, -4.0])
-	result = minimize(chi2,params,args=(ll,spectrum_to_fit,ll0, noise), bounds=b)
-	return result
-
-def overseer_work(spectra_to_fit, ll, task_grain_size=16):
-    """ Function to define the work to do by the overseer """
-
-    # Reshape the atmosphere:
-    NX,NY,NL = spectra_to_fit.shape
-    spectra_to_fit = spectra_to_fit.reshape(NX*NY, NL)
-
-    # Index of the task to keep track of each job
-    task_index = 0
-    num_workers = size - 1
-    closed_workers = 0
-
-    data_size = 0 # total number of pixels to invert
-    num_tasks = 0 # ceiling of data_size / task_grain_size
-    file_idx_for_task = [] # does this have sth to do with reading from file?
-    task_start_idx = [] # no idea
-    task_writeback_range = [] # no idea
-    
-    cdf_size = spectra_to_fit.shape[0]
-    print("info::overseer::cdf_size = ", cdf_size)
-
-    num_cdf_tasks = int(np.ceil(cdf_size / task_grain_size)) # number of tasks = roundedup number of pixels / grain
-    
-    task_start_idx.extend(range(0, cdf_size, task_grain_size))
-    
-    task_writeback_range.extend([slice(data_size + i*task_grain_size, min(data_size + (i+1)*task_grain_size,
-        data_size + cdf_size)) for i in range(num_cdf_tasks)])
-    
-    data_size = cdf_size
-    num_tasks = num_cdf_tasks
-
-    # Define the lists that will store the data of each feature-label pair - I hate lists, can I work with 
-    # numpy array 
-    models = [None] * data_size
-    fits = [None] * data_size
-    
-    success = True
-    task_status = [0] * num_tasks
-
-    with tqdm(total=num_tasks, ncols=110) as progress_bar:
-        
-        # While we don't have more closed workers than total workers keep looping
-        while closed_workers < num_workers:
-            data_in = comm.recv(source=MPI.ANY_SOURCE, tag=MPI.ANY_TAG, status=status)
-            source = status.Get_source()
-            tag = status.Get_tag()
-
-            if tag == tags.READY:
-                try:
-                    task_index = task_status.index(0)
-                    
-                    # Slice out our task
-                    data = slice_tasks(spectra_to_fit, task_start_idx[task_index], task_grain_size)
-                    data['index'] = task_index
-                    data['ll'] = ll
-
-                    # send the data of the task and put the status to 1 (done)
-                    comm.send(data, dest=source, tag=tags.START)
-                    task_status[task_index] = 1
-
-                # If error, or no work left, kill the worker
-                except:
-                    comm.send(None, dest=source, tag=tags.EXIT)
-
-            # If the tag is Done, receive the status, the index and all the data
-            # and update the progress bar
-            elif tag == tags.DONE:
-                success = data_in['success']
-                task_index = data_in['index']
-
-                if not success:
-                    task_status[task_index] = 0
-                    print(f"Task: {task_index} failed")
-                else:
-                    task_writeback = task_writeback_range[task_index]
-                    spectra[task_writeback] = data_in['spectrum']
-                    progress_bar.update(1)
-
-            # if the worker has the exit tag mark it as closed.
-            elif tag == tags.EXIT:
-                #print(" * Overseer : worker {0} exited.".format(source))
-                closed_workers += 1
-
-    # Once finished, dump all the data
-    
-    spectra = np.asarray(spectra)
-    spectra = spectra.reshape(NX, NY, NL)
-    print("info::overseer::writing the spectra")
-    spechdu = fits.PrimaryHDU(spectra)
-    wavhdu = fits.ImageHDU(wave)
-    to_output = fits.HDUList([spechdu, wavhdu])
-    to_output.writeto(sys.argv[1]+'_fit.fits', overwrite=True)
-
-    models = np.asarray(models)
-    models = models.reshape(NX, NY, NL)
-    print("info::overseer::writing the spectra")
-    mhdu = fits.PrimaryHDU(models)
-    to_output.writeto(sys.argv[1]+'_fit.fits', overwrite=True)
-

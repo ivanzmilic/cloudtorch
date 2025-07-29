@@ -30,7 +30,7 @@ def optimization(optimizer,niterations,parameters,model, xl, img):
         reguloss = chi2loss*0.0
         reguloss += 1e1*regu2(parameters, 0,img)
         reguloss += 1e1*regu2(parameters, 1,img) 
-        reguloss += 1e0-1*regu2(parameters, 2,img)
+        reguloss += 1e-1*regu2(parameters, 2,img)
         reguloss += 5e-2*regu2(parameters, 3,img)
         reguloss += 5e-2*regu2(parameters, 4,img)
         #reguloss += 1e1*regu2(parameters, 5,img)

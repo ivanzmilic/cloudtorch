@@ -41,13 +41,13 @@ def me(S1, S2, eta, vlos, deltav, loga, ll0, ll):
         Synthetic spectrum from the underlying atmosphere
     """
     center = ll0 * (1.0 + vlos / 3E5)
-    doppler = deltav / 3E5 * ll0
+    doppler = torch.abs(deltav) / 3E5 * ll0
     a = 10.0 ** loga
     xx = (ll[None, :] - center[:, None]) / doppler[:, None]
     H, F = fvoigt(a[:, None], xx)
     profile = H
     
-    return S1[:, None] + S2[:, None] / (1.0 + eta[:, None] * profile * 1000.0)
+    return torch.abs(S1[:, None]) + torch.abs(S2[:, None]) / (1.0 + torch.abs(eta[:, None]) * profile * 1000.0)
 
 
 # ====================================================================
@@ -69,16 +69,16 @@ def cloud(S, deltatau, vlos, deltav, loga, ll0, ll, I_incoming):
         Synthetic spectrum with cloud absorption
     """
     center = ll0 * (1.0 + vlos / 3E5)  # line center in Angstroms, shifted due to velocity
-    doppler = deltav / 3E5 * ll0  # Doppler width in angstroms
+    doppler = torch.abs(deltav) / 3E5 * ll0  # Doppler width in angstroms
     
     a = 10.0 ** loga
     xx = (ll[None, :] - center[:, None]) / doppler[:, None]
     H, F = fvoigt(a[:, None], xx)
     profile = H
     
-    tau_lambda = deltatau[:, None] * profile
+    tau_lambda = torch.abs(deltatau[:, None]) * profile
     
-    return I_incoming * torch.exp(-tau_lambda) + S[:, None] * (1.0 - torch.exp(-tau_lambda))
+    return I_incoming * torch.exp(-tau_lambda) + torch.abs(S[:, None]) * (1.0 - torch.exp(-tau_lambda))
 
 
 # ====================================================================

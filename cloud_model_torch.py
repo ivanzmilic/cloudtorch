@@ -152,3 +152,39 @@ def model_synth_2clouds(x, p):
     spectrum_final = cloud(p[:, 11], p[:, 12], p[:, 13], p[:, 14], p[:, 15], ll0, ll, spectrum_cloud1)
     
     return spectrum_final
+
+def model_synth_2clouds_givenbck(x, p):
+
+    ''' Full model synthesis with two cloud layers, given background intensity.
+
+    Args:
+        x: [wavelength_array, line_center_array]
+        p: parameter array with shape (n_pixels, 10)
+           [S_cloud1, deltatau1, vlos_cloud1, deltav_cloud1, loga_cloud1,
+            S_cloud2, deltatau2, vlos_cloud2, deltav_cloud2, loga_cloud2]
+
+    Returns:
+        Synthetic spectrum
+    
+    '''
+    ll, ll0, I_incoming = x
+
+    ll = torch.from_numpy(ll.astype(np.float32))
+    ll0 = torch.from_numpy(ll0.astype(np.float32))
+    I_incoming = torch.from_numpy(I_incoming.astype(np.float32))
+
+    # Same device:
+    if ll.device != p.device:
+        ll = ll.to(p.device)
+    if ll0.device != p.device:
+        ll0 = ll0.to(p.device)
+    if I_incoming.device != p.device:
+        I_incoming = I_incoming.to(p.device)
+
+    # First cloud layer
+    spectrum_cloud1 = cloud(p[:, 0], p[:, 1], p[:, 2], p[:, 3], p[:, 4], ll0, ll, I_incoming) 
+
+    # Second cloud layer
+    spectrum_final = cloud(p[:, 5], p[:, 6], p[:, 7], p[:, 8], p[:, 9], ll0, ll, spectrum_cloud1)
+
+    return spectrum_final

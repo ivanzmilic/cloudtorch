@@ -153,7 +153,7 @@ def model_synth_2clouds(x, p):
     
     return spectrum_final
 
-def model_synth_2clouds_givenbck(x, p):
+def model_synth_2clouds_givenbck(x, p, I_incoming):
 
     ''' Full model synthesis with two cloud layers, given background intensity.
 
@@ -167,11 +167,11 @@ def model_synth_2clouds_givenbck(x, p):
         Synthetic spectrum
     
     '''
-    ll, ll0, I_incoming = x
+    ll, ll0 = x
 
     ll = torch.from_numpy(ll.astype(np.float32))
     ll0 = torch.from_numpy(ll0.astype(np.float32))
-    I_incoming = torch.from_numpy(I_incoming.astype(np.float32))
+    #I_incoming = torch.from_numpy(I_incoming.astype(np.float32))
 
     # Same device:
     if ll.device != p.device:

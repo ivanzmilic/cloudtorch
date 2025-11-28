@@ -41,7 +41,7 @@ def me(S1, S2, eta, vlos, deltav, loga, ll0, ll):
         Synthetic spectrum from the underlying atmosphere
     """
     center = ll0 * (1.0 + vlos / 3E5)
-    doppler = torch.abs(deltav) / 3E5 * ll0
+    doppler = torch.abs(deltav) / 3E5 * ll0 + 1E-2 # Added epsilon to prevent explosions
     a = 10.0 ** loga
     xx = (ll[None, :] - center[:, None]) / doppler[:, None]
     H, F = fvoigt(a[:, None], xx)
@@ -69,7 +69,7 @@ def cloud(S, deltatau, vlos, deltav, loga, ll0, ll, I_incoming):
         Synthetic spectrum with cloud absorption
     """
     center = ll0 * (1.0 + vlos / 3E5)  # line center in Angstroms, shifted due to velocity
-    doppler = torch.abs(deltav) / 3E5 * ll0  # Doppler width in angstroms
+    doppler = torch.abs(deltav) / 3E5 * ll0 + 1E-2  # Doppler width in angstroms, added epsilon to prevent explosions
     
     a = 10.0 ** loga
     xx = (ll[None, :] - center[:, None]) / doppler[:, None]

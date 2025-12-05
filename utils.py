@@ -68,7 +68,7 @@ def regu2(out, ii,img):
     weights = weights/weights.sum()
     weights = weights.view(1, 1, 3, 3).repeat(1, nb_channels, 1, 1)
     weights = weights.to(img.device)
-    mout = torch.reshape(out, (1,img.shape[0],img.shape[1],16))
+    mout = torch.reshape(out, (1,img.shape[0],img.shape[1],out.shape[-1]))
     output_smooth = F.conv2d(m(mout[:,:,:,ii]), weights,padding='valid')
     return torch.sum(torch.abs(output_smooth-mout[:,:,:,ii])**2.0)
 

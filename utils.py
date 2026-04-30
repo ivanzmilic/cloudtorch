@@ -90,6 +90,14 @@ def regu_min(out, ii,img, value):
     mout = torch.reshape(out, (1,img.shape[1],img.shape[2],out.shape[1]))
     return torch.sum(F.relu(-(mout[:,:,:,ii]-value)))
 
+# ====================================================================
+def regu_max(out, ii,img, value):
+    """
+    Applies a regularization that penalizes values above a threshold.
+    """
+    mout = torch.reshape(out, (1,img.shape[1],img.shape[2],out.shape[1]))
+    return torch.sum(F.relu((mout[:,:,:,ii]-value)))
+
 
 # ====================================================================
 def regu_value(out, ii,img, value):

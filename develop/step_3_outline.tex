@@ -1,0 +1,90 @@
+% step_3_outline -- half-page plan for instructions.md step 3
+% Build:  pdflatex step_3_outline.tex
+\documentclass[10pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{charter}
+\usepackage[scaled=0.88]{helvet}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage[margin=1.55cm,top=1.25cm,bottom=1.05cm]{geometry}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{microtype}
+\usepackage{parskip}
+
+\renewcommand{\baselinestretch}{0.98}
+\setlength{\parskip}{2.6pt}
+\pagestyle{empty}
+\raggedbottom
+
+\definecolor{acc}{HTML}{1B4F72}
+\definecolor{gry}{HTML}{555555}
+\definecolor{warn}{HTML}{8A4B00}
+
+\titleformat{\section}{\sffamily\bfseries\footnotesize\color{acc}}{\thesection.}{0.4em}{\MakeUppercase}
+\titlespacing{\section}{0pt}{6pt}{1.5pt}
+
+\newcommand{\co}[1]{{\small\texttt{#1}}}
+\setlist[itemize]{leftmargin=1.1em,itemsep=1.1pt,topsep=1.5pt,parsep=0pt}
+
+\begin{document}
+\small
+
+{\sffamily\bfseries\large\color{acc} cloudtorch / develop\, --- Step 3 outline}
+
+\vspace{1pt}
+{\sffamily\color{gry}\footnotesize Composite forward model (fitted PCA background $\oplus$ two clouds) + a \emph{per-pixel} loss, \textbf{fully differentiable, no regularisation}. A standalone \textbf{per-pixel} building block, kept independent of the inversion strategy so either a PINN or a classical spatially-regularised fit can wrap it. Deliverable of \co{instructions.md} step~3.}
+
+\vspace{1pt}
+{\footnotesize\color{gry}\rule{\textwidth}{0.4pt}}
+
+%% ------------------------------------------------
+\section{Objective}
+
+Assemble the step-2 background model and the existing two-cloud transfer into a \emph{single} autograd-differentiable forward model for \textbf{one pixel} (parameters $\rightarrow$ one spectrum), and pair it with a per-pixel $\chi^2$ loss. No penalty terms and no inversion strategy are baked in here (\S5): regularisation is a \emph{separate outer layer} chosen later, so this same core serves either a PINN or a classical spatially-regularised inversion. Step~3's job is to make the physics + loss clean, differentiable, and strategy-agnostic.
+
+%% ------------------------------------------------
+\section{Composite forward model}
+
+\[
+I_{\rm out}=\underbrace{\mathrm{cloud}_2\!\big(\mathrm{cloud}_1(I_{\rm in})\big)}_{\text{\co{model\_synth\_2clouds\_givenbck}}},\qquad
+I_{\rm in}=\boldsymbol\mu+\mathbf c\,\mathbf V .
+\]
+i.e.\ \co{cmt.model\_synth\_2clouds\_givenbck(x, p\_cloud, background(pca, c))}, chaining the step-2 \co{background()} into the given-background two-cloud routine. Differentiable w.r.t.\ \emph{both} the background coefficients $\mathbf c$ and the cloud parameters $\mathbf p_{\rm cloud}$. The atomic unit is \textbf{one pixel $\rightarrow$ one spectrum}; the routine is simply \emph{batched} over an arbitrary set of pixels with \textbf{no coupling between them}. That per-pixel independence is what keeps the model reusable by any outer inversion (a row is one pixel now, one $(x,y,t)$ sample later).
+
+%% ------------------------------------------------
+\section{Parameters}
+
+Per sample: \textbf{6 background} coefficients $\mathbf c$ $+$ \textbf{10 cloud} ($S,\Delta\tau,v_{\rm los},\Delta v,\log a$ per cloud) $=\mathbf{16}$ free. \textbf{$\log a$ is now a real free parameter} (initialised $-4,-5$); a per-quantity \emph{freeze switch} is retained --- the \co{make\_param(\dots, grad=)} idiom already toggles \co{requires\_grad} --- so it can be frozen again later without touching the physics. Held as plain differentiable tensors now, but the forward takes them as arguments, so in step~4 they are swapped for a neural field's outputs unchanged.
+
+\emph{Caveat (why it was frozen):} free $\log a$ previously drove the Voigt profile to NaNs. We keep the existing NaN guard and clamp $\log a$ to a safe range (e.g.\ $[-6,0]$); the freeze switch is the fallback if it still misbehaves.
+
+%% ------------------------------------------------
+\section{Per-pixel loss}
+
+\[
+\chi^2_i=\sum_\lambda\big(O_{i\lambda}-S_{i\lambda}\big)^2,\qquad
+\mathcal L=\tfrac1{N}\textstyle\sum_i \chi^2_i .
+\]
+Returns the \emph{per-pixel vector} $(\chi^2_i)$ \emph{and} its scalar mean --- the vector feeds a PINN's coordinate sampling \emph{or} is summed with spatial penalties in a classical fit. Optional $1/\sigma^2$ or $1/N_\lambda$ weighting. \textbf{No \co{regu*} penalties here} (\S5).
+
+%% ------------------------------------------------
+\section{Strategy-agnostic: the outer layer is chosen later}
+
+Step~3 commits to \emph{no} inversion strategy and adds \emph{no} penalties. The identical per-pixel model + loss is wrapped later by \emph{one} of:
+\begin{itemize}
+\item[\textbf{A}] \textbf{Classical} --- per-pixel free parameters $+$ explicit spatial (and temporal) regularisation on the parameter maps (reuse the \co{utils.py} \co{regu*} penalties).
+\item[\textbf{B}] \textbf{PINN} --- parameters are the outputs of a smooth coordinate network $f(x,y,t)$; smoothness is implicit (steps~4--5).
+\end{itemize}
+Both call the step-3 core \emph{unchanged}; only the parameter source and the regulariser differ. An unregularised per-pixel fit is \emph{knowingly degenerate} (the background can absorb near-rest core signal --- your earlier concern); whichever outer layer you pick supplies the regularisation that resolves it. Init: clouds at $\mp20$\,km\,s$^{-1}$ (not critical).
+
+\textbf{Verified} (\co{t\,=\,13}, 15\,080\,px, CPU): gradients reach \emph{both} $\mathbf c$ and $\mathbf p_{\rm cloud}$ with no NaNs; a 400-step \emph{unregularised} Adam fit drops the mean per-pixel $\chi^2$ from $5.18$ to $0.11$ ($\approx\!47\times$, $\sim\!1.7\%$ RMS residual) and observed-vs-fitted images agree across the line --- \textbf{the model, per-pixel loss, and fit routine work}. Two honest notes: the low $\chi^2$ is \emph{not} proof of a correct background/cloud split (unregularised $\Rightarrow$ still degenerate); and free $\log a$ is stable but \emph{weakly constrained} (grad $\lesssim\!10^{-5}$), so it barely leaves its init --- freezing it would cost almost nothing.
+
+\vspace{1pt}
+{\footnotesize\color{gry}\rule{\textwidth}{0.4pt}}
+{\sffamily\color{gry}\footnotesize \textbf{Built \& run:} \co{composite\_model.py} (\co{composite\_synth} $+$ \co{chi2\_per\_pixel}) and the step-3 notebook --- compose, per-pixel loss, grad check, smoke-fit, obs-vs-fit image panels. Next: the outer layer (a PINN, steps~4--5, \emph{or} a classical spatially-regularised fit) wraps this unchanged.}
+
+\end{document}

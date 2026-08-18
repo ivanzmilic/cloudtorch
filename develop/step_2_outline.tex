@@ -1,0 +1,88 @@
+% step_2_outline -- half-page plan for instructions.md step 2
+% Build:  pdflatex step_2_outline.tex
+\documentclass[10pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{charter}
+\usepackage[scaled=0.88]{helvet}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage[margin=1.55cm,top=1.25cm,bottom=1.05cm]{geometry}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{microtype}
+\usepackage{parskip}
+
+\renewcommand{\baselinestretch}{0.98}
+\setlength{\parskip}{2.6pt}
+\pagestyle{empty}
+\raggedbottom
+
+\definecolor{acc}{HTML}{1B4F72}
+\definecolor{gry}{HTML}{555555}
+
+\titleformat{\section}{\sffamily\bfseries\footnotesize\color{acc}}{\thesection.}{0.4em}{\MakeUppercase}
+\titlespacing{\section}{0pt}{6pt}{1.5pt}
+
+\newcommand{\co}[1]{{\small\texttt{#1}}}
+\setlist[itemize]{leftmargin=1.1em,itemsep=1.1pt,topsep=1.5pt,parsep=0pt}
+
+\begin{document}
+\small
+
+{\sffamily\bfseries\large\color{acc} cloudtorch / develop\, --- Step 2 outline}
+
+\vspace{1pt}
+{\sffamily\color{gry}\footnotesize A differentiable, 6-parameter-per-pixel background model built on the step-1 PCA basis; supplies $I_{\rm in}$ for step~3. Deliverable of \co{instructions.md} step~2. All PyTorch. \textbf{Model + initialisation only --- no optimiser runs here.}}
+
+\vspace{1pt}
+{\footnotesize\color{gry}\rule{\textwidth}{0.4pt}}
+
+%% ------------------------------------------------
+\section{Objective}
+
+Turn the \emph{fixed} step-1 dictionary $\{\boldsymbol\mu,\mathbf V\}$ ($K=6$) into a \emph{trainable} background model: each pixel's background is a linear combination of the six eigenprofiles with its own coefficients $\mathbf c$. This replaces today's fixed, per-spectrum skglm background (\co{bdata\,=\,new\_fit\,$-$\,new\_extrafit}) with a compact, differentiable 6-DoF model that step~3 will optimise \emph{jointly} with the two clouds. Step~2 only builds and initialises it.
+
+%% ------------------------------------------------
+\section{The model}
+
+\[
+\mathbf b \;=\; \boldsymbol\mu + \mathbf c\,\mathbf V,\qquad
+\mathbf c\in\mathbb R^{\,n_{\rm pix}\times 6},\ \ \mathbf V\in\mathbb R^{6\times L},\ \ \boldsymbol\mu\in\mathbb R^{L}.
+\]
+This is exactly \co{PCABackground.reconstruct(c)}: linear, autograd-ready, returning $(n_{\rm pix},L)$ --- the incoming intensity $I_{\rm in}$ fed to \co{cmt.cloud(...)} in step~3. Free parameters: $6\,n_{\rm pix}$ ($=90{,}480$ over the $116{\times}130$ crop), vs $8\,n_{\rm pix}$ for the two clouds. Keeping $K=6$ (not 10) deliberately limits the background's freedom to imitate cloud absorption.
+
+%% ------------------------------------------------
+\section{Parameters \& initialisation}
+
+\begin{itemize}
+\item $\mathbf c$ is a single \co{nn.Parameter} of shape $(n_{\rm pix},6)$, following the notebook \co{make\_param} idiom (splittable per-PC later --- like the cloud quantities --- if freezing is ever wanted).
+\item \textbf{Init:} $\mathbf c_0=\co{pca.project(tofit)}=(\text{tofit}-\boldsymbol\mu)\,\mathbf V^{\!\top}$, the orthogonal projection of the \emph{observed} spectra onto the background subspace (reuses \co{PCABackground.project}).
+\item \emph{Caveat (flag, don't fix):} \co{tofit} still contains the filament absorption, so $\mathbf c_0$ sits slightly low at the absorbed wavelengths. It is only a warm start --- step~3 moves $\mathbf c$ as the clouds take up the absorption. Fallback: $\mathbf c=0$ ($\boldsymbol\mu$ only).
+\end{itemize}
+
+%% ------------------------------------------------
+\section{Interface \& consistency}
+
+\begin{itemize}
+\item Returns $(n_{\rm pix},L)$; device/dtype align automatically inside \co{reconstruct}.
+\item Tiny module \co{background\_model.py} (mirrors \co{cloud\_model\_torch.py}): \co{init\_background\_coeffs(pca, obs)} $\rightarrow$ \co{nn.Parameter} $(n_{\rm pix},6)$; \co{background(pca, coeffs)} $\rightarrow (n_{\rm pix},L)$.
+\item \textbf{Live trap:} \co{tofit} and the basis must share the \emph{same} $\lambda$-crop \co{[100:500]} and the \emph{same} \co{Iqs}. In step~3 the fit's \co{Iqs} must equal the basis's normalisation, or the background sits at the wrong absolute level and the transfer $I_{\rm out}=I_{\rm in}e^{-\tau}+S(1-e^{-\tau})$ is biased.
+\end{itemize}
+
+%% ------------------------------------------------
+\section{Deferred to step 3 (and a sanity check)}
+
+\begin{itemize}
+\item No optimiser in step~2; the joint background+cloud $\chi^2$ + penalties are step~3.
+\item Optional spatial smoothness on the six coefficient maps via \co{utils.regu2} --- mind its \co{img.shape[0:2]} reshape, unlike the \co{[1:3]} of the other \co{regu*} --- added when we build the composite loss.
+\item \textbf{Sanity check} (non-fitting, in the notebook): residual $\text{tofit}-\co{reconstruct(project(tofit))}$; its map previews the absorption the two clouds must explain, and confirms 6 modes leave the filament --- and only the filament --- in the residual.
+\end{itemize}
+
+\vspace{1pt}
+{\footnotesize\color{gry}\rule{\textwidth}{0.4pt}}
+{\sffamily\color{gry}\footnotesize After your review: create \co{develop/background\_model.py} and a step-2 test cell (init $\mathbf c$ from \co{tofit}, plot background vs observed, residual map, confirm \co{coeffs.grad}). Then step~3 --- composite background + two clouds.}
+
+\end{document}

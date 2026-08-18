@@ -1,0 +1,91 @@
+% step_1_outline -- half-page plan for instructions.md step 1
+% Build:  pdflatex step_1_outline.tex
+\documentclass[10pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{charter}
+\usepackage[scaled=0.88]{helvet}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage[margin=1.55cm,top=1.25cm,bottom=1.05cm]{geometry}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{microtype}
+\usepackage{parskip}
+
+\renewcommand{\baselinestretch}{0.98}
+\setlength{\parskip}{2.6pt}
+\pagestyle{empty}
+\raggedbottom
+
+\definecolor{acc}{HTML}{1B4F72}
+\definecolor{gry}{HTML}{555555}
+
+\titleformat{\section}{\sffamily\bfseries\footnotesize\color{acc}}{\thesection.}{0.4em}{\MakeUppercase}
+\titlespacing{\section}{0pt}{6pt}{1.5pt}
+
+\newcommand{\co}[1]{{\small\texttt{#1}}}
+\setlist[itemize]{leftmargin=1.1em,itemsep=1.1pt,topsep=1.5pt,parsep=0pt}
+
+\begin{document}
+\small
+
+{\sffamily\bfseries\large\color{acc} cloudtorch / develop\, --- Step 1 outline}
+
+\vspace{1pt}
+{\sffamily\color{gry}\footnotesize Build a PCA background basis from the last $N$ snapshots of the $(t,y,x,\lambda)$ cube. Deliverable of \co{instructions.md} step~1; consumed by step~2. All PyTorch. No fitting here --- this step only produces a \emph{fixed} basis.}
+
+\vspace{1pt}
+{\footnotesize\color{gry}\rule{\textwidth}{0.4pt}}
+
+%% ------------------------------------------------
+\section{Objective}
+
+Produce a compact, differentiable spectral dictionary $\{\boldsymbol\mu,\ \mathbf V\}$ --- a mean spectrum plus $K=6$ orthonormal eigenprofiles --- that spans the observed variability of the \emph{background} (the quiet-Sun profile lying behind the filament). The eigenprofiles are computed \emph{globally}, pooling \emph{all} pixels of the last $N$ frames (see \S5a), so a \emph{single shared} basis serves every pixel. In step~2 the background of any pixel becomes $\mathbf b = \boldsymbol\mu + \mathbf c\,\mathbf V$ with only $K=6$ free coefficients $\mathbf c$; those coefficients replace the fixed, per-spectrum \co{skglm} background (\co{bdata\,=\,rdata\,$-$\,rextra}) used today.
+
+%% ------------------------------------------------
+\section{Inputs \& preprocessing}
+
+\begin{itemize}
+\item Cube \co{data} of shape $(t,y,x,\lambda)$; take the \textbf{last $N$} time steps $\rightarrow (N,N_y,N_x,L)$.
+\item Apply the \emph{same} $\lambda$-crop (\co{[100:500]}) and continuum normalisation ($\div\,\co{Iqs}$) as the fit, so the basis lives in the fitted data's units.
+\item Flatten space+time into \emph{one} spectra matrix $\mathbf X\in\mathbb R^{M\times L}$ --- \textbf{every pixel of all $N$ frames is a row}, $M=N\,N_yN_x$ ($=150{,}800$ for $N{=}10$). This is a \emph{global, all-pixel} decomposition, not a per-pixel temporal one. Drop NaN rows; optionally random-subsample $M$ to bound memory.
+\end{itemize}
+
+%% ------------------------------------------------
+\section{PCA}
+
+\begin{itemize}
+\item Mean $\boldsymbol\mu=\tfrac1M\sum_m\mathbf X_m$; centre $\mathbf X_c=\mathbf X-\boldsymbol\mu$.
+\item Eigendecompose the $L\times L$ covariance $\mathbf C=\mathbf X_c^{\!\top}\mathbf X_c/(M{-}1)$ via \co{torch.linalg.eigh} (cheaper/stabler than full SVD since $L\!\approx\!400\ll M$; do it in \co{float64}, then cast). Sort descending; keep the top $K$ eigenvectors as rows of $\mathbf V\in\mathbb R^{K\times L}$.
+\item Choose $K$ from the explained-variance curve, not by guess. For MiHI ($N{=}10$, $M{=}150{,}800$) it shows a sharp elbow after 4 modes ($90\%$ of the variance), two further genuine modes (5--6, $\to94\%$), then a flat photon-noise floor --- so we adopt $\boldsymbol{K=6}$. $\mathbf V$ is orthonormal $\Rightarrow$ projection is a single mat-mul; $K$ stays a live slider (\co{set\_n\_components}), needing no re-solve.
+\end{itemize}
+
+%% ------------------------------------------------
+\section{Outputs (interface for step 2)}
+
+A small module, e.g.\ \co{pca\_background.py}:
+\begin{itemize}
+\item \co{fit\_background\_basis(cube, N, K, ...)} $\rightarrow$ \co{mu} $(L,)$, \co{V} $(K,L)$, \co{expvar} $(K,)$.
+\item \co{reconstruct(c)}\,$=\boldsymbol\mu+\mathbf c\,\mathbf V$, \ \co{c} of shape $(\text{n\_pix},K)$ --- linear, autograd-ready.
+\item \co{project(spec)}\,$=(\text{spec}-\boldsymbol\mu)\,\mathbf V^{\!\top}$ --- to \emph{initialise} $\mathbf c$ from any observed spectrum.
+\item Persist to \co{.pt}/\co{.npz} so the basis is computed once and reused.
+\end{itemize}
+
+%% ------------------------------------------------
+\section{Decisions (resolved) and one caveat}
+
+\begin{itemize}
+\item[\textbf{a}] \textbf{Global, all-pixel basis (chosen).} We pool every pixel of all $N$ frames into one matrix and compute \emph{one} shared set of eigenprofiles used by every pixel --- \textbf{not} a per-pixel \emph{temporal} PCA (a separate basis from each pixel's own $N$-point time series). The global route shares information across the field and is very well determined ($M\!\sim\!10^5$ rows); the per-pixel route would give only $\le N{-}1$ noisy modes per pixel with no spatial sharing.
+\item[\textbf{b}] \textbf{What feeds the PCA (chosen: raw).} We use the raw last-$N$ spectra, which Ivan considers filament-free. The alternative --- the already-reconstructed backgrounds (\co{new\_fit}\,$-$\,\co{new\_extrafit}) --- stays a one-line switch in the notebook if the raw frames turn out to be contaminated.
+\item[\textbf{c}] \textbf{Remaining caveat:} if the filament were \emph{still present} in the last $N$ frames, the basis would absorb the H$\alpha$ cloud absorption and, in step~3, the background could reproduce the very feature the two clouds must explain --- a degeneracy. This is a reason $K$ is kept small ($=6$, not 10): fewer background modes are less able to mimic clouds. Final check in step~3 --- cloud parameters should stay stable as $K$ goes $4\to6\to8$.
+\item[] \emph{Minor:} $N=10$; keep $\boldsymbol\mu$ explicitly (don't force a zero-mean model); \co{float64} eigensolve $\rightarrow$ \co{float32} basis.
+\end{itemize}
+
+\vspace{1pt}
+{\footnotesize\color{gry}\rule{\textwidth}{0.4pt}}
+{\sffamily\color{gry}\footnotesize Resolved: $N=10$ (raw, filament-free) \textbullet\ global all-pixel PCA \textbullet\ $K=6$ ($\approx94\%$ of variance; the tail is a photon-noise floor). Next: step~2 --- the $K{=}6$-parameter background model on this basis.}
+
+\end{document}

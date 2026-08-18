@@ -1,0 +1,162 @@
+% cloudtorch -- one-page technical summary of main_gpu_bck_mparams.ipynb
+% Build:  pdflatex cloudtorch_summary.tex
+\documentclass[9pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{charter}
+\usepackage[scaled=0.88]{helvet}
+\usepackage{amsmath}
+\usepackage[margin=1.35cm,top=1.1cm,bottom=0.95cm]{geometry}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{multicol}
+\usepackage{microtype}
+\usepackage{parskip}
+\usepackage[hyphens]{url}
+
+\renewcommand{\baselinestretch}{0.97}
+\setlength{\parskip}{2.2pt}
+\setlength{\columnsep}{0.7cm}
+\pagestyle{empty}
+\raggedbottom
+\sloppy
+\emergencystretch=2em
+
+\definecolor{acc}{HTML}{1B4F72}
+\definecolor{gry}{HTML}{555555}
+
+\titleformat{\section}{\sffamily\bfseries\footnotesize\color{acc}}{\thesection.}{0.4em}{\MakeUppercase}
+\titlespacing{\section}{0pt}{5pt}{1.5pt}
+
+\newcommand{\co}[1]{{\small\texttt{#1}}}
+\setlist[itemize]{leftmargin=1.05em,itemsep=0.6pt,topsep=1.2pt,parsep=0pt}
+
+\begin{document}
+\small
+
+%% ------------------------------------------------ title
+{\sffamily\bfseries\large\color{acc} cloudtorch \,/\, \texttt{main\_gpu\_bck\_mparams.ipynb}}
+
+\vspace{1pt}
+{\sffamily\color{gry}\footnotesize Two-component H$\alpha$ cloud-model inversion of a MiHI filament, fitted on a fixed, observationally derived background.}
+
+\vspace{1.5pt}
+{\footnotesize\color{gry}\rule{\textwidth}{0.4pt}}
+\vspace{-2pt}
+
+{\footnotesize\color{gry}I.~Milic \& C.~J.~D\'iaz Baso \,\textbullet\, GPL-3.0 \,\textbullet\, \texttt{github.com/ivanzmilic/cloudtorch} \,\textbullet\, described at commit \texttt{1b10fab} + uncommitted change (source-function penalty $10^3\!\rightarrow\!10^6$) \,\textbullet\, 24 code cells, no markdown \,\textbullet\, kernel \texttt{pt}, Python 3.12}
+
+\begin{multicols}{2}
+
+%% ------------------------------------------------
+\section{What it does}
+
+Inverts one time step of an H$\alpha$ imaging-spectroscopy cube of a solar filament. Each pixel's spectrum is modelled as \emph{two absorbing slabs} (``clouds'') stacked along the line of sight on top of a background profile that is \emph{not} fitted but supplied from the data. All 15\,080 pixels are inverted \emph{simultaneously} in a single PyTorch graph, with spatial-regularization terms coupling neighbouring pixels --- the point of the port from the older \co{scipy}+MPI per-pixel code in \co{original\_cloud\_model/}.
+
+The two slabs are initialised at $-20$ and $+20$\,km\,s$^{-1}$ to capture the counter-streaming blue/red-shifted components of filament threads.
+
+%% ------------------------------------------------
+\section{Data}
+
+Two \co{.npz} archives in \co{/dat/milic/MiHI\_filament/} (paths hard-coded; FITS paths in the code are commented out):
+
+\begin{itemize}
+\item \co{mihi\_all\_data.npz} (5.8\,GB) --- \co{data} \co{(113,146,160,550)} float32 = (t,\,y,\,x,\,$\lambda$); \co{wav} (550,).
+\item \co{mihi\_rvm\_reconstruction\_\allowbreak averages\_skglm.npz} (11.6\,GB) --- \co{new\_fit}, \co{new\_extrafit}, same shape.
+\end{itemize}
+
+\textbf{Line.} $\lambda\in[6560.42,6565.09]$\,\AA, $\Delta\lambda=8.5$\,m\AA\ --- H$\alpha$ 6562.8\,\AA. Instrument: MiHI (SST). Intensity only, no polarimetry.
+
+\textbf{Selection.} Time step \co{t\,=\,13}; spatial crop \co{[15:-15,15:-15]}; $\lambda$ slice \co{[100:500]}. Result: \co{tofit} of shape \textbf{(116, 130, 400)} $=$ 6\,032\,000 data points, covering 6561.27--6564.66\,\AA\ ($\pm77$\,km\,s$^{-1}$).
+
+\textbf{Normalisation.} Divided by \co{Iqs\,=\,mean(tofit[:,:,-20:])} $=0.7584$, a pseudo-continuum from the 20 reddest points; the background is divided by the same constant.
+
+\textbf{Background.} \co{bdata = rdata - rextra}. The reconstruction decomposes every spectrum with \co{skglm.Lasso} on a dictionary of negative Gaussians plus a continuum term; \co{new\_extrafit} is the Gaussian-only (extra absorption) part, so the difference isolates the smooth quiet-Sun profile behind the filament --- exactly the incident intensity $I_{\rm in}$ the cloud model needs.
+
+%% ------------------------------------------------
+\section{Forward model}
+
+\co{cloud\_model\_torch.model\_synth\_2clouds\_givenbck}. Each slab applies isothermal slab transfer,
+\[
+I_{\rm out}(\lambda)=I_{\rm in}(\lambda)\,e^{-\tau_\lambda}+S\!\left(1-e^{-\tau_\lambda}\right),
+\]
+\[
+\tau_\lambda=|\Delta\tau|\,H(a,x),\qquad
+x=\frac{\lambda-\lambda_0\!\left(1+v/c\right)}{\Delta\lambda_{\rm D}},
+\]
+\[
+\Delta\lambda_{\rm D}=\frac{|\Delta v|}{c}\lambda_0+10^{-2}\,\text{\AA}.
+\]
+Cloud 1 acts on the background, cloud 2 on cloud 1's output. $H$ is a Humlí\v{c}ek-style complex rational approximation (\co{fvoigt}) evaluated in \co{torch} complex arithmetic, so the whole model is autograd-differentiable. $\lambda_0$ is taken as the \emph{window mean}, 6562.9663\,\AA.
+
+Parameter vector, \co{(n\_pixels, 10)}:
+\[
+\mathbf{p}=[\,S,\Delta\tau,v_{\rm los},\Delta v,\log a\,]_{\rm c1}\!\oplus[\,\cdots\,]_{\rm c2}
+\]
+The \co{me()} Milne-Eddington routine and the 11/16-parameter entry points in the same module are \emph{not} used here --- the background replaces them.
+
+%% ------------------------------------------------
+\section{Inversion}
+
+Each physical quantity is a separate \co{nn.Parameter} of shape \co{(15080,)}, restacked every iteration by \co{combine\_parameters()}. This is what ``mparams'' means, and it is what allows individual quantities to be frozen: \textbf{both} \co{log a} are fixed ($-4$, $-5$) because free damping produced NaNs. Free parameters: $8\times15\,080=\mathbf{120\,640}$, i.e.\ a 50:1 data-to-parameter ratio.
+
+\textbf{Loss.} \co{torch.mean(\allowbreak torch.sum(\allowbreak (obs-syn)**2))} --- an unweighted, unnormalised sum of squared residuals (the outer \co{mean} over a scalar is a no-op; there is no noise weighting).
+
+\textbf{Penalties} (14 terms, from \co{utils.py}); \co{regu2} is an L2 roughness penalty against a $3\times3$ reflection-padded neighbour average, \co{regu\_min}/\co{regu\_max} are one-sided ReLU hinges:
+
+\vspace{2pt}
+{\footnotesize
+\begin{tabular}{@{}llr@{}}
+\toprule
+\textbf{Term} & \textbf{Applies to} & \textbf{Weight} \\
+\midrule
+\co{regu2}    & $S_1,S_2$ smoothness      & $10^{6}$ \\
+\co{regu2}    & $\Delta\tau$ smoothness   & $10^{-1}$ \\
+\co{regu2}    & $v_{\rm los}$ smoothness  & $10^{-2}$ \\
+\co{regu2}    & $\Delta v$ smoothness     & $10^{-2}$ \\
+\co{regu\_min}& $\Delta v\ge 8$\,km\,s$^{-1}$ & $10^{8}$ \\
+\co{regu\_min}& $S,\Delta\tau\ge 0$       & $10^{7}$ \\
+\co{regu\_max}& $S\le 0.6$                & $10^{7}$ \\
+\bottomrule
+\end{tabular}}
+\vspace{2pt}
+
+The 8\,km\,s$^{-1}$ floor is justified in-notebook by the thermal speed of hydrogen at 5000\,K, $\sqrt{2k_{\rm B}T/m_{\rm H}}=9.08$\,km\,s$^{-1}$.
+
+\textbf{Optimizer.} Adam, \co{lr\,=\,5e-2}, \textbf{5000 iterations}, full field per step (no batching, no LR schedule, no early stopping --- only a NaN guard that dumps the offending parameter rows).
+
+\textbf{Initial values.} $S=0.2/0.6$, $\Delta\tau=4.5$, $v=\mp20$, $\Delta v=12$ for clouds 1/2.
+
+\textbf{Recorded run.} \co{cuda}, 5000 iterations in 1:13 (68\,it/s); final \co{loss=1.02e5}, \co{chi2loss=2.79e3}, \co{reguloss=9.93e4} --- the penalty term now dominates $\chi^2$ by ${\sim}35\times$. Mean $\log_{10}\chi^2=-3.36$. Raising the $S$ penalty from $10^3$ to $10^6$ cost only ${\sim}8\%$ in $\chi^2$ while flattening the $S$ maps almost completely, which is the experiment the current working tree encodes.
+
+%% ------------------------------------------------
+\section{Outputs}
+
+Written to \co{figs\_S\_reg\_1E6/} (untracked). \textbf{No arrays are saved} --- \co{parameters} and \co{fit\_spectra} live only in the kernel session.
+
+\begin{itemize}
+\item \co{inversion\_maps.png} --- $2\times4$ maps of the 8 free parameters.
+\item \co{fit\_comparison\_random\_profiles.png} --- 3 random pixels, data vs.\ fit.
+\item \co{fit\_comparison\_three\_wavelength\_maps.png} --- observed vs.\ fitted images at 10/50/90\% of the window.
+\item \co{fit\_chisq\_map.png} --- $\log_{10}\chi^2$ map.
+\item \co{inversion\_results\_velocities\_*.png} --- velocities masked by $\tfrac12[1+\tanh k(\tau-1.5)]$ and weighted by $S(1-e^{-\tau})$, suppressing velocities where the slab is optically thin and therefore unconstrained.
+\end{itemize}
+
+%% ------------------------------------------------
+\section{Caveats}
+
+\begin{itemize}
+\item $\lambda_0$ is the window mean (6562.9663\,\AA), not the H$\alpha$ rest wavelength --- a $+7.2$\,km\,s$^{-1}$ shift of the velocity zero point unless \co{wav} already accounts for it.
+\item The $+10^{-2}$\,\AA\ Doppler-width epsilon (added to stop the Voigt profile exploding) bakes ${\approx}0.46$\,km\,s$^{-1}$ of spurious width into every reported $\Delta v$.
+\item Positivity comes from \co{torch.abs()} inside the forward model, which makes the likelihood exactly symmetric about zero (a sign degeneracy) and puts a gradient kink at 0; the hinge penalties are the real bounds.
+\item \co{regu2} reshapes with \co{img.shape[0:2]} while every other \co{regu*} uses \co{img.shape[1:3]}, so they must be handed differently shaped arrays. The notebook does this correctly, but it is a live trap.
+\item Returned \co{syn} is from \emph{before} the last \co{optimizer.step()} while \co{final\_params} is from after it --- a one-step mismatch.
+\item \co{print(np.mean(chisq[0,0]))} reports one pixel, not the field mean.
+\item Hard-coded machine-specific data paths; \co{optimization()} is duplicated across the notebooks and scripts; cell 23 is dead debug code.
+\end{itemize}
+
+\end{multicols}
+\end{document}

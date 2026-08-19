@@ -1,0 +1,51 @@
+% step_6_outline -- half-page plan for instructions.md step 6 (deployment)
+% Build:  pdflatex step_6_outline.tex
+\documentclass[10pt,a4paper]{article}
+\usepackage[T1]{fontenc}\usepackage[utf8]{inputenc}\usepackage{charter}
+\usepackage[scaled=0.88]{helvet}\usepackage{amsmath}\usepackage{amssymb}
+\usepackage[margin=1.55cm,top=1.25cm,bottom=1.0cm]{geometry}
+\usepackage{xcolor}\usepackage{titlesec}\usepackage{enumitem}\usepackage{microtype}\usepackage{parskip}
+\renewcommand{\baselinestretch}{0.97}\setlength{\parskip}{2.3pt}\pagestyle{empty}\raggedbottom
+\definecolor{acc}{HTML}{1B4F72}\definecolor{gry}{HTML}{555555}
+\titleformat{\section}{\sffamily\bfseries\footnotesize\color{acc}}{\thesection.}{0.4em}{\MakeUppercase}
+\titlespacing{\section}{0pt}{5pt}{1.5pt}
+\newcommand{\co}[1]{{\small\texttt{#1}}}
+\setlist[itemize]{leftmargin=1.05em,itemsep=1.0pt,topsep=1.2pt,parsep=0pt}
+\begin{document}\small
+
+{\sffamily\bfseries\large\color{acc} cloudtorch / develop\, --- Step 6 outline}
+
+\vspace{1pt}
+{\sffamily\color{gry}\footnotesize Deploy the validated step-1--5 stack as a single configurable, resumable command-line script that fits the \emph{full} $(t,y,x,\lambda)$ cube on GPU: notebook$\rightarrow$script, config/CLI, \co{device=cuda}, coordinate minibatching, checkpointing, saved parameter maps. Deliverable of \co{instructions.md} step~6 --- the final step.}
+
+\vspace{1pt}{\footnotesize\color{gry}\rule{\textwidth}{0.4pt}}
+
+%% ------------------------------------------------
+\section{Objective}
+
+Turn the validated stack --- today the notebook \co{step\_5\_reg\_test.ipynb} --- into one configurable, resumable script that fits the \emph{full} $(t,y,x,\lambda)$ cube on GPU. \textbf{No new physics or model changes:} \co{ParameterField}, \co{composite\_synth}, \co{chi2\_per\_pixel} and \co{regularization\_loss} are reused verbatim; only the driver (data\,$\to$\,basis\,$\to$\,field\,$\to$\,train\,$\to$\,save) is new. Success: a no-arg run reproduces the step-5 notebook, and the full-field run is reached by editing \emph{config alone}. This closes \co{instructions.md}.
+
+%% ------------------------------------------------
+\section{Notebook $\to$ script}
+
+A thin driver (\co{fit\_cube.py}) mirrors the notebook cells as functions: \co{load\_data} (auto-detect path, border and $\lambda$ crop, normalise by $I_{qs}$), \co{build\_basis} (\co{fit\_background\_basis}, or load a persisted basis), \co{build\_field} (\co{ParameterField} $+$ the field-average \co{bkg\_bias}), \co{train} (cosine-annealed Adam; loss $=\chi^2+$\co{regularization\_loss}; grad-clip; optional minibatch), \co{save\_outputs}. The diagnostic/plot cells (emission check, maps, spectra, residuals) become an optional \co{-{}-report} that writes the figures $+$ the $\chi^2$/RMS/emission summary to the out-dir, \emph{off} the training hot path. The per-pixel core (steps 1--5) is untouched.
+
+%% ------------------------------------------------
+\section{Config \& CLI}
+
+One grouped config object (dataclass or dict) exposing every top-of-notebook knob: \emph{data} (path list, border \co{YS/XS}, \co{LAM}, \co{N\_BASIS}, \co{K}, frames \co{T0/N\_T} or \emph{all}, \co{CROP} or \emph{full}); \emph{field} (\co{N\_FREQ}, \co{SIGMA\_XY}, \co{SIGMA\_T}, \co{WIDTH}, \co{DEPTH}, \co{S\_MAX}, \co{DV\_FLOOR}, \co{seed}); \emph{train} (\co{N\_ITERS}, \co{LR}, \co{GRAD\_CLIP}, \co{BATCH}, \co{device}); and the grouped \co{REG} dict verbatim. Loaded from a JSON/YAML file, with a few \co{argparse} overrides (\co{-{}-config}, \co{-{}-resume}, \co{-{}-out}, \co{-{}-device}, \co{-{}-crop}, \co{-{}-n-t}) for quick scans. The step-5 values \emph{are} the default config, so weight/scale scans are just re-launches with a different file.
+
+%% ------------------------------------------------
+\section{Full-cube coordinates \& scale transfer}
+
+\co{grid\_coords} normalises \emph{each} axis to $[-1,1]$ over its own extent, so \co{SIGMA\_XY}/\co{SIGMA\_T} and the smoothness weights $w^{xy},w^{t}$ live in \emph{normalised} units --- their physical meaning (cycles per pixel; smoothing length) drifts with crop and frame count. Enlarging the config naively would silently re-scale the step-4/5 tuning. \textbf{Fix:} normalise to a \emph{fixed physical scale} --- $1$ unit $=$ \co{REF\_XY} pixels / \co{REF\_T} frames (config-set), centred on the cube --- \emph{not} to the per-domain $[-1,1]$. Choose \co{REF} so the $40\times40\times4$ tuning crop reproduces today's $[-1,1]$; then the tuned $\sigma$ and weights transfer to the full field unchanged (it merely spans a wider coordinate range at the same per-pixel scale). This is a small addition to \co{grid\_coords} (a physical-scale option); the fallback, if no code change is wanted, is to rescale $\sigma\!\propto\!n$ and $w\!\propto\!1/n^2$ by hand per run. Because every loss term is a per-pixel \emph{mean}, the \co{REG} weights are invariant to \co{BATCH} and pixel-count --- only this normalisation needs care.
+
+%% ------------------------------------------------
+\section{Checkpointing, resume \& outputs}
+
+Periodic $+$ final checkpoints hold \co{field.state\_dict}, optimiser, scheduler, iteration, and the RNG states (torch/cuda --- for reproducible minibatching), plus the config and the PCA basis (\co{pca.save}), so a checkpoint is self-contained. \co{-{}-resume} restores all and continues the cosine schedule. Final output: evaluate the field over the full grid under \co{no\_grad}, reshape to $(N_t,N_y,N_x,\cdot)$, and save an \co{.npz} of the background coeffs \co{c}\,$(\cdot,6)$ and \co{p\_cloud}\,$(\cdot,10)$ (incl.\ the frozen \co{loga}) with metadata (\co{wav}, \co{LAM}, $I_{qs}$, config); optional FITS via \co{utils.writefits}. Determinism via the config seeds; the \co{-{}-report} block re-uses the notebook's diagnostics for QC.
+
+\vspace{1pt}{\footnotesize\color{gry}\rule{\textwidth}{0.4pt}}
+{\sffamily\color{gry}\footnotesize Plan only --- no code until you approve. Then \co{fit\_cube.py} $+$ a default config (the step-5 values) $+$ a small \co{grid\_coords} physical-scale option; steps 1--5 stay unchanged. \textbf{Final step} --- closes \co{instructions.md}: the full $(t,y,x,\lambda)$ cube fit on GPU, configurable, resumable, with saved parameter maps.}
+
+\end{document}

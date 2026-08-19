@@ -47,7 +47,7 @@ import torch.nn.functional as F
 __all__ = [
     "FIELD_NAMES", "FIELD_GROUPS", "DEFAULT_REG",
     "assemble_fields", "smoothness_penalty", "hinge_bounds", "no_emission",
-    "expand_group_config", "regularization_loss",
+    "background_anchor", "expand_group_config", "regularization_loss",
 ]
 
 # ---- field layout -------------------------------------------------------------
@@ -163,22 +163,48 @@ def no_emission(pca, c, cap=1.0, weight=1.0):
 
 
 # ====================================================================
+def background_anchor(c, c_ref, weight=1.0):
+    """L2 anchor pulling the background coeffs c toward a reference vector c_ref --
+    the filament-free last-N-frame background, projected onto the basis:
+
+        R = weight * < ||c - c_ref||^2 >   (sum over K coeffs, mean over pixels).
+
+    This is the load-bearing fix for the OTHER background degeneracy: the clouds
+    can be fed a background whose H-alpha core has been filled UP toward the
+    continuum (bright/flat, no absorption) -- which stays <= 1, so the no_emission
+    cap never catches it. Anchoring c toward the filament-free reference keeps the
+    background at its true quiet-Sun profile (with its absorption line) and forces
+    the clouds to supply the filament absorption. Use the last-N-frame background,
+    NOT the observed projection (which already contains the absorption -- the
+    freeze test showed that route fails).
+
+    c     : (N, K) field background coefficients.
+    c_ref : (N, K) or (K,) reference coefficients (broadcast over pixels).
+    """
+    if weight == 0.0:
+        return c.new_zeros(())
+    c_ref = torch.as_tensor(c_ref, dtype=c.dtype, device=c.device)
+    return weight * (c - c_ref).pow(2).sum(dim=-1).mean()
+
+
+# ====================================================================
 def expand_group_config(reg=None):
     """Turn a human-facing grouped REG dict into per-field (P,) weight/bound
     vectors. Missing entries default to 0 weight and NaN (disabled) bounds, so a
     partial config just turns terms on. Returns a dict with keys
-    w_xy, w_t, lo, hi, w_lo, w_hi (each a (P,) tensor) plus ('no_weight','no_cap').
+    w_xy, w_t, lo, hi, w_lo, w_hi (each a (P,) tensor) plus
+    ('no_weight','no_cap','anchor_weight').
     """
     reg = DEFAULT_REG if reg is None else reg
     w_xy = torch.zeros(P); w_t = torch.zeros(P)
     lo = torch.full((P,), float("nan")); hi = torch.full((P,), float("nan"))
     w_lo = torch.zeros(P); w_hi = torch.zeros(P)
     for group, cfg in reg.items():
-        if group == "no_emission":
+        if group in ("no_emission", "anchor"):
             continue
         if group not in FIELD_GROUPS:
             raise KeyError(f"unknown REG group {group!r}; "
-                           f"expected one of {list(FIELD_GROUPS) + ['no_emission']}")
+                           f"expected one of {list(FIELD_GROUPS) + ['no_emission', 'anchor']}")
         for k in FIELD_GROUPS[group]:
             w_xy[k] = cfg.get("w_xy", 0.0)
             w_t[k]  = cfg.get("w_t", 0.0)
@@ -189,28 +215,36 @@ def expand_group_config(reg=None):
             w_lo[k] = cfg.get("w_lo", 0.0)
             w_hi[k] = cfg.get("w_hi", 0.0)
     ne = reg.get("no_emission", {})
+    an = reg.get("anchor", {})
     return dict(w_xy=w_xy, w_t=w_t, lo=lo, hi=hi, w_lo=w_lo, w_hi=w_hi,
-                no_weight=float(ne.get("weight", 0.0)), no_cap=float(ne.get("cap", 1.0)))
+                no_weight=float(ne.get("weight", 0.0)), no_cap=float(ne.get("cap", 1.0)),
+                anchor_weight=float(an.get("weight", 0.0)))
 
 
 # ====================================================================
-def regularization_loss(c, p_cloud, coords, pca, reg=None, weights=None):
-    """Assemble the full regulariser R = R_smooth + R_bound(+no_emission) for one
-    field evaluation. Add its ['total'] to the chi2 data term.
+def regularization_loss(c, p_cloud, coords, pca, reg=None, weights=None, c_ref=None):
+    """Assemble the full regulariser R = R_smooth + R_bound + no_emission + anchor
+    for one field evaluation. Add its ['total'] to the chi2 data term.
 
     c, p_cloud : field(coords) outputs.
     coords     : the SAME (N,3) tensor fed to the field, with requires_grad=True.
-    pca        : the fixed PCA basis (for no_emission).
+    pca        : the fixed PCA basis (for no_emission / anchor).
     reg        : grouped REG config (defaults to DEFAULT_REG).
     weights    : optional pre-expanded config from expand_group_config(reg) -- pass
                  it to avoid re-expanding every iteration in the training loop.
+    c_ref      : optional (N,K) or (K,) reference background coeffs for the anchor
+                 (the filament-free last-N-frame background, projected). MUST be
+                 sliced to the SAME pixels as c when minibatching. If None the
+                 anchor term is 0 regardless of its weight.
 
-    Returns a dict {'smooth','bound','no_emission','total'} of scalar tensors.
+    Returns a dict {'smooth','bound','no_emission','anchor','total'} of scalars.
     """
     w = expand_group_config(reg) if weights is None else weights
     fields = assemble_fields(c, p_cloud)
     r_smooth = smoothness_penalty(fields, coords, w["w_xy"], w["w_t"])
     r_bound  = hinge_bounds(fields, w["lo"], w["hi"], w["w_lo"], w["w_hi"])
     r_noem   = no_emission(pca, c, cap=w["no_cap"], weight=w["no_weight"])
+    r_anchor = (background_anchor(c, c_ref, weight=w["anchor_weight"])
+                if c_ref is not None else c.new_zeros(()))
     return {"smooth": r_smooth, "bound": r_bound, "no_emission": r_noem,
-            "total": r_smooth + r_bound + r_noem}
+            "anchor": r_anchor, "total": r_smooth + r_bound + r_noem + r_anchor}

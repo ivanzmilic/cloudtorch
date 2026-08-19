@@ -1,0 +1,82 @@
+% step_6_howto -- one-page run & use guide for the step-6 inversion code
+% Build:  pdflatex step_6_howto.tex
+\documentclass[10pt,a4paper]{article}
+\usepackage[T1]{fontenc}\usepackage[utf8]{inputenc}\usepackage{charter}
+\usepackage[scaled=0.88]{helvet}\usepackage{amsmath}\usepackage{amssymb}
+\usepackage[margin=1.55cm,top=1.25cm,bottom=1.0cm]{geometry}
+\usepackage{xcolor}\usepackage{titlesec}\usepackage{enumitem}\usepackage{microtype}\usepackage{parskip}
+\renewcommand{\baselinestretch}{0.97}\setlength{\parskip}{2.3pt}\pagestyle{empty}\raggedbottom
+\definecolor{acc}{HTML}{1B4F72}\definecolor{gry}{HTML}{555555}
+\titleformat{\section}{\sffamily\bfseries\footnotesize\color{acc}}{\thesection.}{0.4em}{\MakeUppercase}
+\titlespacing{\section}{0pt}{5pt}{1.5pt}
+\newcommand{\co}[1]{{\small\texttt{#1}}}
+\setlist[itemize]{leftmargin=1.05em,itemsep=1.0pt,topsep=1.2pt,parsep=0pt}
+\begin{document}\small
+
+{\sffamily\bfseries\large\color{acc} cloudtorch / develop\, --- Step 6 how-to}
+
+\vspace{1pt}
+{\sffamily\color{gry}\footnotesize Running \& using the cube inversion \co{fit\_cube.py}: the step-1--5 stack (fitted PCA background $\oplus$ two absorbing clouds, fit by a Fourier neural field with explicit regularisation) as one configurable, resumable CUDA script. With the baked-in defaults it reproduces the tuned step-5 notebook; the full cube is reached by config alone.}
+
+\vspace{1pt}{\footnotesize\color{gry}\rule{\textwidth}{0.4pt}}
+
+%% ------------------------------------------------
+\section{Environment}
+Python + CUDA torch: \co{/home/milic/miniconda3/envs/pt/bin/python} (torch 2.11, CUDA). No new physics --- it reuses \co{pca\_background}, \co{pinn\_model}, \co{composite\_model}, \co{regularizers} unchanged. The data path auto-detects from the \co{data.path} list; add yours there or via \co{-{}-set}.
+
+%% ------------------------------------------------
+\section{Quick start}
+{\small
+\begin{verbatim}
+PY=/home/milic/miniconda3/envs/pt/bin/python
+cd /home/milic/codes/cloudtorch/develop
+$PY fit_cube.py --out run1 --report          # defaults == step-5 notebook
+$PY fit_cube.py --dump-config cfg.json        # write full default config to edit
+$PY fit_cube.py --config cfg.json --out run2   # run an edited config
+\end{verbatim}
+}
+
+%% ------------------------------------------------
+\section{Configuring (three ways; everything lives in the config)}
+\textbf{(1)} edit a file: \co{-{}-dump-config cfg.json}, edit, \co{-{}-config cfg.json}. \textbf{(2)} inline: \co{-{}-set data.crop=32 train.n\_iters=2000} (values parse as JSON: \co{null}, \co{true}, numbers, \co{[0,0]}). \textbf{(3)} flags: \co{-{}-out}, \co{-{}-device}. Precedence: defaults $\rightarrow$ \co{-{}-config} $\rightarrow$ \co{-{}-set} $\rightarrow$ flags; the \emph{resolved} config (with the scaled $\sigma$) is written to \co{DIR/config\_used.json}. Key knobs: \co{data.crop}/\co{data.n\_t} (\co{null} $=$ full field / all frames), \co{train.batch} (\co{null} $=$ full batch), \co{train.n\_iters}, and the whole \co{reg} block (smoothness \co{w\_xy/w\_t}, hinges, \co{no\_emission}, and the \co{anchor} weight --- the main background lever). The Fourier bandwidths \textbf{scale with the domain automatically} (\co{sigma\_xy\_ref}/\co{sigma\_t\_ref} at \co{crop\_ref}/\co{n\_t\_ref}), so the tuning transfers as the crop/frames grow --- no manual $\sigma$ retune.
+
+%% ------------------------------------------------
+\section{Outputs (in the \texttt{-{}-out} dir)}
+\co{params.npz} --- \co{c (Nt,Cy,Cx,6)}, \co{p\_cloud (Nt,Cy,Cx,10)} (order in \co{cloud\_names}, incl. frozen \co{loga}), plus \co{wl, lam, Iqs, ts, ys, xs, cfg}. \co{checkpoint.pt} --- self-contained (field $+$ optimiser $+$ scheduler $+$ RNG $+$ config $+$ PCA basis), written every \co{io.ckpt\_every} iters and at the end. \co{config\_used.json}; with \co{-{}-report}: \co{loss / obs\_vs\_fit / emission\_hist / spectra} PNGs. Console \co{[metrics]}: RMS (\% of mean $I$) and the background emission diagnostic.
+
+%% ------------------------------------------------
+\section{Resume / evaluate-only}
+{\small
+\begin{verbatim}
+$PY fit_cube.py --resume run1/checkpoint.pt                 # continue to n_iters
+$PY fit_cube.py --resume run1/checkpoint.pt --no-train --report   # eval + figures
+\end{verbatim}
+}
+Resume restores everything and continues the cosine schedule to the original \co{n\_iters}. (To train \emph{longer}, start a fresh run with a larger \co{train.n\_iters}.)
+
+%% ------------------------------------------------
+\section{Scale to the full cube}
+{\small
+\begin{verbatim}
+$PY fit_cube.py --set data.crop=null data.n_t=null train.batch=8192 \
+                train.n_iters=30000 --out full --report
+\end{verbatim}
+}
+\co{crop=null}/\co{n\_t=null} take the whole field / all frames; $\sigma$ rescales itself; pick \co{train.batch} to fit GPU memory (the regulariser is mesh-free, so minibatching is exact). Then \textbf{tune \co{reg}} at that scale --- the weights are relative to the $\chi^2$ term.
+
+%% ------------------------------------------------
+\section{Using the results}
+{\small
+\begin{verbatim}
+import numpy as np
+d = np.load("run1/params.npz", allow_pickle=True)
+vlos1 = d["p_cloud"][..., 2]     # (Nt,Cy,Cx) LOS velocity, cloud 1, km/s
+S1    = d["p_cloud"][..., 0]     # dtau1=[...,1], dv1=[...,3]; names in d["cloud_names"]
+\end{verbatim}
+}
+\co{p\_cloud} gives the physical cloud parameters directly (\co{c} is the 6 background PCA coeffs). To \emph{re-synthesise} spectra or the background, the checkpoint is self-contained --- reload it (it carries the PCA basis $+$ field weights) and call the same forward, or run \co{-{}-resume \ldots{} -{}-no-train -{}-report}.
+
+\vspace{1pt}{\footnotesize\color{gry}\rule{\textwidth}{0.4pt}}
+{\sffamily\color{gry}\footnotesize Companion to \co{step\_6\_outline.pdf} (the plan). Code: \co{fit\_cube.py}; guide: \co{STEP6\_HOWTO.md}. The step-1--5 modules are reused unchanged.}
+
+\end{document}

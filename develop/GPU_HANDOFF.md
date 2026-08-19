@@ -1,4 +1,4 @@
-# GPU-server handoff — step 5 (regularised PINN) → scale up & step 6
+# GPU-server handoff — steps 1–6 (step 6 deployment DONE)
 
 Self-contained note for picking up `develop/` on the GPU server. General project
 status lives in `HANDOFF.md`; this file is the practical "how to run it bigger on
@@ -7,13 +7,14 @@ space–time neural field (PINN), per `develop/instructions.md`.
 
 --------------------------------------------------------------------------------
 ## TL;DR
-Steps 1–5 are built and **validated on CPU**. Step 5 (`regularizers.py` +
-`step_5_reg_test.ipynb`) added explicit penalties — smoothness + soft bounds +
-a **no-emission** cap on the background spectrum — that **break the step-4
-background/cloud degeneracy** (background emission ~5× continuum → ~1.1×) with
-only ~6 % χ² cost. The code is already device-agnostic; the job on the server is
-to **run it on the tuned/full config on CUDA, scan the reg weights at that scale,
-then do step 6 (notebook → script)**.
+Steps 1–6 are built. Step 5 (`regularizers.py` + `step_5_reg_test.ipynb`) added explicit
+penalties — smoothness + soft bounds + a **no-emission** cap — plus a later **background
+anchor** (`background_anchor`, `w·‖c−c_ref‖²` toward the filament-free profile) that fixes a
+*second* degeneracy the ≤1 cap misses: the background filling its H-α core up to continuum
+while the clouds over-absorb. **Step 6** (`fit_cube.py` + `STEP6_HOWTO.md`) turns the whole
+stack into one configurable, resumable **CUDA CLI** that fits the full `(t,y,x,λ)` cube —
+validated end-to-end on real data. What's left is science, not code: **scan the REG weights
+at full scale** (`reg.anchor.weight` is the key knob).
 
 --------------------------------------------------------------------------------
 ## Files that matter
@@ -22,13 +23,14 @@ then do step 6 (notebook → script)**.
 - `composite_model.py` — step 3 forward (`composite_synth`, `chi2_per_pixel`). `log a` frozen path used.
 - `pinn_model.py` — step 4 field (`ParameterField`, `FourierFeatures`, `grid_coords`). 14 outputs (6 bkg + 8 cloud; `log a` frozen).
 - **`regularizers.py`** — step 5. `regularization_loss`, `expand_group_config`, `smoothness_penalty`, `hinge_bounds`, `no_emission`, `DEFAULT_REG`, `FIELD_NAMES/FIELD_GROUPS`.
-- **`step_5_reg_test.ipynb`** — the runnable notebook (start here). Cells: config → `REG` config → load+basis → field → grad check → **train (χ²+reg)** → **emission diagnostic** → maps/spectra/residuals → cost extrapolation.
-- Read alongside: `step_5_outline.pdf` (the approved plan), `HANDOFF.md` (full history + step-4 caveat).
+- **`step_5_reg_test.ipynb`** — the runnable notebook. Cells: config → `REG` config → load+basis → field → grad check → **train (χ²+reg)** → **emission diagnostic** → maps/spectra/residuals → cost extrapolation.
+- **`fit_cube.py`** — step 6 deployment CLI (start here for full runs). `STEP6_HOWTO.md` = the run guide.
+- Read alongside: `step_5_outline.pdf` + `step_6_outline.pdf` (approved plans), `HANDOFF.md` (full history + step-4 caveat).
 
 --------------------------------------------------------------------------------
 ## Environment & data
-- Env (this machine): `/home/milic/miniconda3/envs/ml/bin/python` (torch 2.3.0). On the
-  server use your CUDA torch build; nothing here pins a version.
+- Env (GPU server): `/home/milic/miniconda3/envs/pt/bin/python` (torch 2.11 + CUDA ✓).
+  (The laptop env was `.../envs/ml` torch 2.3.0, CPU.)
 - Data: `mihi_all_data.npz` (~5.8 GB, uncompressed → memory-mappable), key `data`
   shape `(t, y, x, lambda)`, key `wav`. The notebook auto-detects the path from
   `_CANDS`; **add the server path** to that list in the config cell:
@@ -101,13 +103,20 @@ noise floor and `vlos` gains structure.** Low RMS alone is NOT success (step-4 l
 - [ ] χ² penalty for turning reg on is small (target ≲10 %).
 
 --------------------------------------------------------------------------------
-## What's left — step 6 (deployment)
-Once the tuned/full run looks right: notebook → `.py` script; config/CLI (crop,
-frames, network, `REG`, `BATCH`, `device`); `device=cuda`; coordinate minibatching
-for the full cube; checkpoint/resume; save fitted param maps. Keep the
-outline-PDF-first workflow: write `step_6_outline.pdf` for review before coding.
+## Step 6 — DONE (`fit_cube.py` + `STEP6_HOWTO.md`)
+The notebook is now a script: JSON config + `--set`/`--config` overrides (defaults == the
+tuned notebook), `--device`, `--resume` (self-contained checkpoints: field+opt+sched+RNG+
+config+PCA), `--report` (diagnostic PNGs). Saves `params.npz` (`c (Nt,Cy,Cx,6)`,
+`p_cloud (Nt,Cy,Cx,10)` incl. frozen loga). Fourier σ **auto-scale with the domain**
+(`sigmas_for`, σ∝crop/frames) so the tuning transfers to the full field. Full cube:
 
-Optional lever not yet needed: relaxing the `ParameterField` `S` transform from
-`sigmoid` to `softplus` (bound owned by a hinge), and/or an anchor of the background
-toward the filament-free last-10-frame quiet-Sun profile. The no-emission cap alone
-was sufficient on CPU; add these only if the full-cube fit reintroduces spikes.
+    PY=/home/milic/miniconda3/envs/pt/bin/python
+    $PY fit_cube.py --set data.crop=null data.n_t=null train.batch=8192 \
+                    train.n_iters=30000 --out full --report
+
+Validated end-to-end on real data (fresh + resume + eval-only, deterministic, no warnings).
+Remaining: tune `REG` at full scale (weights are relative to the χ² term).
+
+The background **anchor** (once an optional lever) is now implemented and on by default
+(`reg.anchor.weight=0.1`); `S` was capped via `S_MAX=0.7` rather than switched to softplus.
+Relaxing `S` to softplus+hinge stays an untried lever if `S` saturation returns.

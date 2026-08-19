@@ -4,7 +4,7 @@ H-alpha filament inversion: model = fitted PCA background + two clouds, per
 `develop/instructions.md`. Workflow: a half-page `step_N_outline.pdf` is reviewed
 before coding each step.
 
-## Where we are (steps 1–4 built)
+## Where we are (steps 1–5 built)
 - **Step 1** `pca_background.py` — `PCABackground`: global all-pixel PCA of the last
   10 raw frames; **K=6**. `fit_background_basis`, `.reconstruct(c)`, `.project(spec)`.
 - **Step 2** `background_model.py` — `init_background_coeffs`, `background(pca,c)=mu+c@V`.
@@ -15,6 +15,25 @@ before coding each step.
   range transforms (sigmoid S, softplus dtau, softplus+floor dv). Tuned config
   (`sigma_xy=4, sigma_t=2, lr=5e-3, >=1500 iters, S_MAX=1.0`) baked into the notebook,
   which also auto-detects the data path.
+
+- **Step 5** `regularizers.py` + `step_5_reg_test.ipynb` — explicit penalties on the
+  step-4 PINN: `L = chi2 + R_smooth + R_bound`. `smoothness_penalty` (autograd
+  coordinate derivatives ∂x,∂y,∂t per field — mesh-free, minibatch-safe),
+  `hinge_bounds` (soft one-sided quadratic ReLU² bounds, generalises
+  `utils.regu_min/max`), `no_emission` (upper hinge on the background *spectrum*,
+  caps it at continuum ≈1). Grouped `REG` config (`bkg/S/dtau/vlos/dv/no_emission`)
+  → `expand_group_config` → per-field (P=14) weight/bound vectors; the field's
+  frozen `loga` columns are excluded. `regularization_loss(c,p_cloud,coords,pca,...)`
+  returns `{smooth,bound,no_emission,total}`. **Requires `coords.requires_grad_(True)`.**
+
+## STEP 5 RESULT — the degeneracy is broken
+Calibrated on a 12×12×2 real-data crop (full batch, 200 iters): **REG off** reproduces
+the step-4 pathology (background peak **~4.9× / 5.8×** continuum, median/max);
+**REG on** (`no_emission weight=50`, `bkg w_xy=w_t=0.2`) collapses it to **~1.1× / 1.2×**
+while the data χ² rises only ~6% (1.94→2.05) — still at the noise floor. So the
+emission-spike degeneracy is suppressed at negligible fit cost. Weights are calibrated
+to this data scale; **rescale with the data-term magnitude** if crop size / batching
+changes. Next: run the notebook on the tuned 40×40×4 config, scan weights, then step 6.
 
 ## KEY FINDING (read before trusting step_4_results.pdf)
 On the real data the **per-pixel intensity fit is at the photon-noise floor**

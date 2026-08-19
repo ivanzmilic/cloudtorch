@@ -1,0 +1,64 @@
+% step_5_outline -- half-page plan for instructions.md step 5 (regularization)
+% Build:  pdflatex step_5_outline.tex
+\documentclass[10pt,a4paper]{article}
+\usepackage[T1]{fontenc}\usepackage[utf8]{inputenc}\usepackage{charter}
+\usepackage[scaled=0.88]{helvet}\usepackage{amsmath}\usepackage{amssymb}
+\usepackage[margin=1.55cm,top=1.25cm,bottom=1.0cm]{geometry}
+\usepackage{xcolor}\usepackage{titlesec}\usepackage{enumitem}\usepackage{microtype}\usepackage{parskip}
+\renewcommand{\baselinestretch}{0.97}\setlength{\parskip}{2.3pt}\pagestyle{empty}\raggedbottom
+\definecolor{acc}{HTML}{1B4F72}\definecolor{gry}{HTML}{555555}
+\titleformat{\section}{\sffamily\bfseries\footnotesize\color{acc}}{\thesection.}{0.4em}{\MakeUppercase}
+\titlespacing{\section}{0pt}{5pt}{1.5pt}
+\newcommand{\co}[1]{{\small\texttt{#1}}}
+\setlist[itemize]{leftmargin=1.05em,itemsep=1.0pt,topsep=1.2pt,parsep=0pt}
+\begin{document}\small
+
+{\sffamily\bfseries\large\color{acc} cloudtorch / develop\, --- Step 5 outline}
+
+\vspace{1pt}
+{\sffamily\color{gry}\footnotesize Configurable \emph{explicit} regularisation on the step-4 PINN: autograd space+time smoothness to tame the background degeneracy, and per-parameter soft-hinge bounds on every quantity. Deliverable of \co{instructions.md} step~5. (Step~6 = deployment.)}
+
+\vspace{1pt}{\footnotesize\color{gry}\rule{\textwidth}{0.4pt}}
+
+%% ------------------------------------------------
+\section{Objective}
+
+The step-4 fit reaches the noise floor but the background/cloud split is degenerate (background grows emission spikes the clouds cancel). Add explicit penalties to the loss --- the PINN-native way, since parameters are $p_k=f_\theta(x,y,t)$: penalise the \emph{true} coordinate derivatives (autograd). This gives per-parameter \emph{control} (smooth the background hard, the clouds lightly) on top of the implicit Fourier smoothness. Loss becomes
+\[
+\mathcal L=\chi^2 \;+\; \mathcal R_{\rm smooth}\;+\;\mathcal R_{\rm bound}.
+\]
+
+%% ------------------------------------------------
+\section{Smoothness (autograd coordinate-derivatives)}
+
+For each field $p_k$, with $\mathbf v=(x,y,t)$ carrying \co{requires\_grad},
+\[
+\mathcal R_{\rm smooth}=\sum_k \Big[\,w^{xy}_k\big\langle(\partial_x p_k)^2+(\partial_y p_k)^2\big\rangle
++w^{t}_k\big\langle(\partial_t p_k)^2\big\rangle\Big],
+\]
+each $\partial p_k/\partial\mathbf v$ from \co{torch.autograd.grad(...,\,create\_graph=True)}. Mesh-free and exact, so it works with \emph{random minibatches} (needed for the step-6 full-cube run). Cost: one extra backward through the \emph{MLP} only (not the physics), so mild --- the Voigt forward still dominates.
+
+%% ------------------------------------------------
+\section{Bounds (soft hinges, per parameter)}
+
+Reusing the \co{utils.regu\_min/regu\_max} idea, per quantity with optional $(\ell_k,u_k)$,
+\[
+\mathcal R_{\rm bound}=\sum_k\Big[\,w^{\ell}_k\big\langle\mathrm{ReLU}(\ell_k-p_k)^2\big\rangle
++w^{u}_k\big\langle\mathrm{ReLU}(p_k-u_k)^2\big\rangle\Big].
+\]
+Applies to \emph{all} cloud params and the background. The background \textbf{no-emission} bound is an upper hinge on the reconstructed \emph{spectrum}, $\big\langle\mathrm{ReLU}(b(x,y,t,\lambda)-1)^2\big\rangle_\lambda$. Since bounds are now hinges, the step-4 \emph{strict} transforms relax to positivity-only (softplus on $S,\Delta\tau,\Delta v$ --- keeps the sign-degeneracy fix); $v_{\rm los}$ and the background coeffs go free, their limits owned by the hinges.
+
+%% ------------------------------------------------
+\section{The point: control the background}
+
+Default config: \textbf{strong} $w^{xy},w^{t}$ on the 6 background coefficients $+$ the no-emission bound --- the localized emission spikes are high-frequency, so heavy space+time smoothing plus the cap should suppress them; \textbf{light} smoothing $+$ physical hinges ($S,\Delta\tau\!\ge\!0$; $\Delta v\!\ge\!8$; $|v_{\rm los}|\!\le\!v_{\max}$) on the clouds. Backup lever if needed: an anchor $\lVert\mathbf c-\mathbf c_{\rm ref}\rVert^2$ toward the \emph{filament-free} last-10-frame background (\emph{not} the observed projection --- that already contains the absorption; the freeze test showed it fails).
+
+%% ------------------------------------------------
+\section{Interface \& tuning}
+
+A \co{regularizers.py} (\co{smoothness\_penalty}, \co{hinge\_bounds}, \co{no\_emission}) $+$ a \co{REG} config dict per group \{$w^{xy},w^{t},\ell,u,w^\ell,w^u$\}; reuses \co{composite\_synth}/\co{chi2\_per\_pixel}. The real work is \emph{weight balancing} (data vs each term) --- scan a few, watch that the background loses its emission spikes while $\chi^2$ stays near noise and $v_{\rm los}$ maps gain structure.
+
+\vspace{1pt}{\footnotesize\color{gry}\rule{\textwidth}{0.4pt}}
+{\sffamily\color{gry}\footnotesize Plan only --- no code until you approve. Then \co{regularizers.py} + notebook update + a weight scan. \textbf{Step 6} = deployment prep: notebook$\rightarrow$script, config/CLI, \co{device=cuda}, coordinate minibatching, checkpointing/resume.}
+
+\end{document}

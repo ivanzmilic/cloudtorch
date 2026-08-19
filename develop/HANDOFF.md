@@ -28,14 +28,22 @@ Contributing cause: the background (6 free PCA coeffs/pixel) is unconstrained, a
 small crops the network is over-parameterised (~267k weights vs N_pix*14, e.g. 22k for
 a 40x40 frame — 12x). Fourier smoothness limits spatial frequency, not physicality.
 
-## In progress / next
-- Running a **freeze-background** test (background fixed to per-pixel projection, or to a
-  single mean profile, vs free) to decide the fix.
-- Likely fix: **constrain the background** — freeze at / strongly prior toward the
-  filament-free quiet-Sun profile, add a **no-emission bound** (background <= continuum),
-  and/or reduce background DOF. The clean reference background is the filament-free
-  last-10-frame profile (projecting the *observed* data is itself slightly absorbed).
-- Then **step 5**: full cube on GPU — same code, enlarge config, `device=cuda`, minibatch.
+## Freeze-background test (done) — naive freezing is NOT the fix
+Single frame, same config: free bkg RMS **2.35%**; frozen at per-pixel projection
+**7.97%**; frozen at a single mean profile **8.37%** (cloud v runs to +/-200 km/s, dv
+to 330 — it blows up). Freezing at `pca.project(obs)` double-counts the absorption
+(that reference already contains the line), so the clouds over-absorb; a single mean
+can't track spatial variation. The background is genuinely load-bearing.
+
+## Correct fix (next)
+Anchor the background to the **true filament-free quiet-Sun** profile — NOT the observed
+projection — and forbid emission:
+- reference = last-10-frame (filament-free) background per pixel, or skglm
+  `bdata = new_fit - new_extrafit` (in `mihi_rvm_reconstruction_averages_skglm.npz`);
+- add a **no-emission bound** (background <= continuum ~ 1) so it can't grow peaks the
+  clouds cancel;
+- keep the background flexible but with a prior pulling it toward that reference.
+Then **step 5**: full cube on GPU — same code, enlarge config, `device=cuda`, minibatch.
 
 ## How to run (this machine)
 - Env: `/home/milic/miniconda3/envs/ml/bin/python` (torch 2.3.0, CPU only).

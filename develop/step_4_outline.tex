@@ -1,0 +1,88 @@
+% step_4_outline -- half-page plan for instructions.md step 4 (PINN)
+% Build:  pdflatex step_4_outline.tex
+\documentclass[10pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{charter}
+\usepackage[scaled=0.88]{helvet}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage[margin=1.55cm,top=1.25cm,bottom=1.0cm]{geometry}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{microtype}
+\usepackage{parskip}
+
+\renewcommand{\baselinestretch}{0.97}
+\setlength{\parskip}{2.3pt}
+\pagestyle{empty}
+\raggedbottom
+
+\definecolor{acc}{HTML}{1B4F72}
+\definecolor{gry}{HTML}{555555}
+
+\titleformat{\section}{\sffamily\bfseries\footnotesize\color{acc}}{\thesection.}{0.4em}{\MakeUppercase}
+\titlespacing{\section}{0pt}{5pt}{1.5pt}
+
+\newcommand{\co}[1]{{\small\texttt{#1}}}
+\setlist[itemize]{leftmargin=1.05em,itemsep=1.0pt,topsep=1.2pt,parsep=0pt}
+
+\begin{document}
+\small
+
+{\sffamily\bfseries\large\color{acc} cloudtorch / develop\, --- Step 4 outline}
+
+\vspace{1pt}
+{\sffamily\color{gry}\footnotesize A simple MLP neural field with Fourier-feature encoding that predicts the per-pixel parameters as a smooth function of \emph{space and time}, trained \emph{through} the step-3 physics (Option~B from step~3). Deliverable of \co{instructions.md} step~4. Validated on a small instance locally; the full cube is a server run (step~5).}
+
+\vspace{1pt}
+{\footnotesize\color{gry}\rule{\textwidth}{0.4pt}}
+
+%% ------------------------------------------------
+\section{Objective}
+
+Replace step-3's \emph{free per-pixel} parameter tensors with the outputs of a coordinate network $f_\theta(x,y,t)$. The physics core is untouched: $f_\theta$ predicts the parameters, which flow through \co{composite\_synth} into \co{chi2\_per\_pixel}. Optimising the \emph{network weights} $\theta$ (not per-pixel values) supplies the regularisation --- \textbf{smooth in space \emph{and} time}, because one set of weights serves all $(x,y,t)$ and the Fourier bandwidth caps roughness. This breaks the step-3 background/cloud degeneracy and couples frames in time.
+
+%% ------------------------------------------------
+\section{Architecture (simple)}
+
+Normalise coordinates to $\mathbf v=(x,y,t)\in[-1,1]^3$. \textbf{Fourier features} (fixed, Gaussian random, \emph{anisotropic}):
+\[
+\gamma(\mathbf v)=\big[\sin(2\pi\mathbf B\mathbf v),\ \cos(2\pi\mathbf B\mathbf v)\big],\qquad \mathbf B\in\mathbb R^{m\times3},
+\]
+with the two space columns of $\mathbf B$ scaled by $\sigma_{xy}$ and the time column by $\sigma_t$ --- independent control of spatial vs temporal smoothness. \textbf{MLP:} $\gamma\!\rightarrow\!$ a few hidden layers ($W\!\sim\!128$--$256$, $D\!\sim\!4$, SiLU) $\rightarrow\mathbb R^{14}$. \textbf{Affine output head} anchored at the step-3 inits, $\mathbf p=\mathbf s\odot\mathrm{MLP}(\gamma(\mathbf v))+\mathbf p_0$ with small $\mathbf s$, so at init the field predicts the good step-3 guess everywhere and learns deviations.
+
+%% ------------------------------------------------
+\section{Output $\rightarrow$ physics $\rightarrow$ loss (reused)}
+
+\textbf{$\log a$ is frozen} (per your note): the field outputs \textbf{14} numbers --- $\mathbf c\,(6)$ and 8 cloud values ($S,\Delta\tau,v_{\rm los},\Delta v$ per cloud). We \emph{insert} the fixed $\log a=(-4,-5)$ to assemble \co{p\_cloud}\,$(10)$, then call \co{composite\_synth} and \co{chi2\_per\_pixel} \emph{unchanged} (reuse \co{init\_cloud\_params}'s column layout). Positivity via the \co{abs} already in the cloud model. Loss $=$ mean per-pixel $\chi^2$ over the sampled $(x,y,t)$; Adam on $\theta$.
+
+%% ------------------------------------------------
+\section{The knobs: two bandwidths = space \& time smoothness}
+
+$\sigma_{xy}$ and $\sigma_t$ \emph{are} the regulariser: they set the spatial and temporal frequencies the maps may contain --- small $\Rightarrow$ smoother/more-regularised, large $\Rightarrow$ finer detail (toward step-3 per-pixel freedom). They replace \co{utils.regu2} (space) and any explicit temporal penalty. Scan a few of each; optional weak weight-decay on $\theta$ as a secondary prior.
+
+%% ------------------------------------------------
+\section{Test locally before the server}
+
+The full 4-D fit is a server job, but the code is validated first on a \emph{tiny instance} that runs in seconds on the laptop CPU:
+\begin{itemize}
+\item \textbf{Shrink via config:} small spatial crop (e.g.\ $24\times24$), a few frames ($3$--$5\,t$ around 13), narrow/shallow MLP, few iterations, \co{device=cpu}.
+\item This exercises the \emph{entire} path (Fourier $\rightarrow$ MLP $\rightarrow$ \co{composite\_synth} $\rightarrow$ loss $\rightarrow$ backward $\rightarrow$ step): shapes, gradients, NaN-safety, and that the loss decreases. If the tiny run trains, the code is correct.
+\item \textbf{Config-driven scale:} crop, frame set, $W,D,m$, batch size, iters and device are top-of-notebook knobs, so the \emph{identical} code becomes the full run by enlarging them and setting \co{device=cuda} --- no code change to deploy.
+\item \textbf{Minibatch over coordinates:} the field is evaluated per $(x,y,t)$ sample, so memory is bounded by the batch, not the cube; big problems run in minibatches (slower locally, full-size on the server).
+\item Use the tiny run's measured per-iter time and memory to \emph{size the server} (scale by \#samples $\times$ iters).
+\end{itemize}
+
+%% ------------------------------------------------
+\section{Module \& notebook (after approval)}
+
+\co{pinn\_model.py}: \co{FourierFeatures} (fixed anisotropic $\mathbf B$) and \co{ParameterField} (\co{forward(coords)}$\rightarrow$\co{c}\,$(N,6)$, \co{p\_cloud}\,$(N,10)$ with frozen $\log a$), reusing \co{composite\_model}. A step-4 notebook defaulting to the laptop-sized smoke test, comparing against step~3 on the small instance (similar $\chi^2$, smoother space-time maps).
+
+\vspace{1pt}
+{\footnotesize\color{gry}\rule{\textwidth}{0.4pt}}
+{\sffamily\color{gry}\footnotesize Plan only --- no code until you approve. Then \co{pinn\_model.py} $+$ a step-4 notebook (tiny-instance default). Step~5 $=$ the full-cube run on the server: enlarge the config, \co{device=cuda}, same code.}
+
+\end{document}

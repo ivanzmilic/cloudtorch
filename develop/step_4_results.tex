@@ -1,0 +1,44 @@
+\documentclass[10pt,a4paper]{article}
+\usepackage[T1]{fontenc}\usepackage[utf8]{inputenc}\usepackage{charter}
+\usepackage[scaled=0.88]{helvet}\usepackage{amsmath}\usepackage{amssymb}
+\usepackage[margin=1.4cm,top=1.15cm,bottom=0.9cm]{geometry}
+\usepackage{xcolor}\usepackage{titlesec}\usepackage{booktabs}\usepackage{graphicx}
+\usepackage{microtype}\usepackage{parskip}
+\setlength{\parskip}{2.2pt}\pagestyle{empty}\raggedbottom
+\definecolor{acc}{HTML}{1B4F72}\definecolor{gry}{HTML}{555555}
+\titleformat{\section}{\sffamily\bfseries\footnotesize\color{acc}}{\thesection.}{0.4em}{\MakeUppercase}
+\titlespacing{\section}{0pt}{5pt}{1.5pt}
+\newcommand{\co}[1]{{\small\texttt{#1}}}
+\begin{document}\small
+{\sffamily\bfseries\large\color{acc} cloudtorch / develop --- Step 4 results (PINN)}
+
+\vspace{1pt}{\sffamily\color{gry}\footnotesize Space-time MLP + Fourier neural field trained through the two-cloud physics, on the real MiHI H$\alpha$ cube (\co{ml} env, CPU). Parameters $=f_\theta(x,y,t)$; \co{log a} frozen; ranges via sigmoid/softplus; background from PCA (K=6).}
+
+\vspace{2pt}{\footnotesize\color{gry}\rule{\textwidth}{0.4pt}}
+
+\textbf{Best fit.} crop 44$\times$44, 5 frames, $\sigma_{xy}=4$, $\sigma_t=2$, width 256, 1500 iters \ $\rightarrow$ \textbf{RMS residual 2.74\% of continuum}, mean per-pixel $\chi^2$ 0.12 (p95 0.22), 1182\,s on CPU. Parameter ranges stayed physical (S [0.151, 0.879], $v_{\rm los,1}$ [-45.9, -20.8] km/s, $\Delta v$ [11.3, 27.6] km/s); background sits above vs.\ observed core.
+
+\vspace{-2pt}
+\begin{center}\footnotesize
+\begin{tabular}{@{}lcccccccc@{}}
+\toprule
+run & $\sigma_{xy}$ & $\sigma_t$ & lr & iters & RMS\% & $\chi^2$ & TV$(v_1)$ & s \\
+\midrule
+\co{s1\_lr3e3\_sx4} & 4 & 2 & 3e-03 & 700 & 4.64 & 0.32 & 1.81 & 133 \\
+\co{s2\_lr1e2\_sx4} & 4 & 2 & 1e-02 & 700 & 2.99 & 0.13 & 2.75 & 130 \\
+\co{s3\_lr5e3\_sx2} & 2 & 2 & 5e-03 & 700 & 3.25 & 0.16 & 1.98 & 120 \\
+\co{s4\_lr5e3\_sx6} & 6 & 2 & 5e-03 & 700 & 3.54 & 0.19 & 2.43 & 115 \\
+\co{s5\_lr5e3\_st1} & 4 & 1 & 5e-03 & 700 & 3.53 & 0.19 & 2.19 & 102 \\
+\co{s6\_lr5e3\_nf256} & 4 & 2 & 5e-03 & 700 & 3.24 & 0.16 & 2.24 & 105 \\
+\co{s7\_lr5e3\_conv1500} & 4 & 2 & 5e-03 & 1500 & 2.95 & 0.13 & 2.78 & 220 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\vspace{-3pt}
+\begin{center}\includegraphics[width=\textwidth]{step4_maps.png}\end{center}
+\vspace{-6pt}
+\begin{center}\includegraphics[width=\textwidth]{step4_spectra.png}\end{center}
+
+\vspace{-2pt}{\footnotesize\color{gry}\textbf{Takeaways.} Fit tracks the data everywhere (RMS 2.7\%) and reproduces the filament threads in the core image; residuals concentrate only on the brightest thread. Maps are smooth and physical ($S_1$ elevated along the filament; $v_{\rm los,2}$ a coherent redshifted field with a $\sim$0 band on the thread; $v_{\rm los,1}$ nearly uniform, i.e.\ weakly constrained spatially). On average the background sits above the observed core so the clouds carry the absorption, though a minority of pixels show residual background/cloud degeneracy. Sweet spot $\sigma_{xy}{\approx}4$, $\sigma_t{=}2$, lr\,$5{\times}10^{-3}$, $\gtrsim$1500 iters; the Fourier bandwidths are the space--time regulariser. The physics forward dominates CPU cost ($\sim$0.8\,s/iter here) -- the identical code scales to the full cube on GPU (step~5).}
+\end{document}

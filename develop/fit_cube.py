@@ -63,7 +63,7 @@ DEFAULT_CFG = {
         "path": ["/dat/milic/MiHI_filament/mihi_all_data.npz",
                  "/home/milic/data/MiHI_halpha_filament/mihi_all_data.npz"],
         "n_basis": 10, "k": 6, "lam": [100, 500], "border": 15,
-        "t0": 13, "n_t": 16, "crop": 64,      # n_t / crop = null -> all frames / full field
+        "t0": 13, "n_t": 16, "t_start": None, "crop": 64,   # n_t/crop=null -> all frames/full field; t_start=null -> centre on t0
     },
     "field": {
         "n_freq": 128, "sigma_xy_ref": 4.0, "sigma_t_ref": 2.0,
@@ -165,8 +165,14 @@ def load_data(cfg, device):
         xs = slice(cx - crop // 2, cx - crop // 2 + crop)
         Cy = Cx = crop
 
-    ts = list(range(T)) if d["n_t"] is None else \
-        list(range(d["t0"] - d["n_t"] // 2, d["t0"] - d["n_t"] // 2 + d["n_t"]))
+    if d["n_t"] is None:
+        ts = list(range(T))
+    elif d.get("t_start") is not None:                     # explicit window: first n_t from t_start
+        ts = list(range(d["t_start"], d["t_start"] + d["n_t"]))
+    else:                                                  # centred on t0
+        ts = list(range(d["t0"] - d["n_t"] // 2, d["t0"] - d["n_t"] // 2 + d["n_t"]))
+    if max(ts) >= T or min(ts) < 0:
+        raise ValueError(f"frame window {ts[0]}..{ts[-1]} out of range for {T} frames")
 
     obs = np.copy(fullsp[ts][:, ys, xs, :]).astype(np.float32) / Iqs
     ref_spec = blk[:, ys, xs, :].mean(0) / Iqs             # filament-free per-pixel bkg

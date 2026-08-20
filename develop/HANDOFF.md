@@ -38,6 +38,33 @@ before coding each step.
   `--report`. Fourier σ auto-scale with the domain (`sigmas_for`). Validated end-to-end on
   real data (fresh + resume + eval-only, deterministic).
 
+## Given-background line (steps 3a / 4a / 5a) — the fixed-background sibling
+An alternative to the *fitted* PCA background: use the pre-calculated skglm quiet-Sun
+profile `bdata = new_fit - new_extrafit` (from `mihi_rvm_reconstruction_averages_skglm.npz`,
+next to the data cube) as a **fixed** incident background (0 background DoF), so the clouds
+carry the core absorption. Background is now a **mode**: `fit` (PCA) ↔ `given` (fixed).
+- **Step 3a** `given_background.py` — memory-maps the reconstruction npz and carves it to
+  the SAME window / λ-crop / `Iqs` as the data. `composite_model.py` refactored: shared
+  `_compose` tail + new `composite_synth_given(x, I_in, p_cloud)`. Notebook
+  `step_3a_given_test.ipynb`.
+- **Step 4a** given-background PINN. `pinn_model.py::ParameterField` generalised to a
+  **flexible head `n_bkg + n_free`**: `n_bkg` 0 (given) … K (fitted); any of the 10 cloud
+  slots can be **frozen to its init** via `freeze=(...)` (default `loga1,loga2` → n_free=8).
+  `forward -> (c, p_cloud)`; given mode has `c=(N,0)`, caller uses `_, pc = field(coords)`.
+  Notebook `step_4a_pinn_test.ipynb` (+ comprehensive param-maps and off-core diagnostic).
+- **Step 5a** explicit regularisation on 4a. `regularizers.py` made **n_bkg-aware**
+  (`field_layout(n_bkg)`, `expand_group_config(reg, n_bkg=)`); n_bkg=0 → cloud-only groups,
+  `no_emission`/`anchor` inert. Notebook `step_5a_reg_test.ipynb` (loss = chi2 + smooth +
+  bound on the 8 cloud fields; a `vlos` range hinge + `dv` cap tame the runaway tails).
+- **Well-posed by construction:** fixing the background removes the emission-spike /
+  core-fill degeneracy steps 5–6 fought (no `no_emission` / anchor needed). **Limit:** off
+  the line core the fit reverts to the fixed background (the clouds only touch λ near their
+  velocity), so the wings are background-limited — by design, not a bug.
+- Outlines now in `develop/docs/` (`step_3a/4a/5a_outline.pdf`), alongside steps 1–6.
+- **Backward-compatible:** steps 4/5 notebooks and `fit_cube.py` unchanged.
+- **Deferred:** wire `background_mode` (fit/given) + the flexible head through
+  `fit_cube.py` (step-6 deployment).
+
 ## STEP 5 RESULT — the degeneracy is broken
 Calibrated on a 12×12×2 real-data crop (full batch, 200 iters): **REG off** reproduces
 the step-4 pathology (background peak **~4.9× / 5.8×** continuum, median/max);

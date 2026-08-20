@@ -1,0 +1,87 @@
+% step_3a_outline -- half-page plan for the GIVEN-background variant of step 3
+% Build:  pdflatex step_3a_outline.tex
+\documentclass[10pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{charter}
+\usepackage[scaled=0.88]{helvet}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage[margin=1.55cm,top=1.25cm,bottom=1.05cm]{geometry}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{microtype}
+\usepackage{parskip}
+
+\renewcommand{\baselinestretch}{0.98}
+\setlength{\parskip}{2.6pt}
+\pagestyle{empty}
+\raggedbottom
+
+\definecolor{acc}{HTML}{1B4F72}
+\definecolor{gry}{HTML}{555555}
+\definecolor{warn}{HTML}{8A4B00}
+
+\titleformat{\section}{\sffamily\bfseries\footnotesize\color{acc}}{\thesection.}{0.4em}{\MakeUppercase}
+\titlespacing{\section}{0pt}{6pt}{1.5pt}
+
+\newcommand{\co}[1]{{\small\texttt{#1}}}
+\setlist[itemize]{leftmargin=1.1em,itemsep=1.1pt,topsep=1.5pt,parsep=0pt}
+
+\begin{document}
+\small
+
+{\sffamily\bfseries\large\color{acc} cloudtorch / develop\, --- Step 3a outline}
+
+\vspace{1pt}
+{\sffamily\color{gry}\footnotesize Composite forward model on a \emph{pre-calculated, fixed} background $\oplus$ two clouds --- the given-background \textbf{sibling} of step~3, so background handling becomes a user-selectable mode (\emph{fit} vs \emph{given}). Per-pixel, strategy-agnostic, differentiable, no regularisation. All PyTorch; \textbf{no fitting here}.}
+
+\vspace{1pt}
+{\footnotesize\color{gry}\rule{\textwidth}{0.4pt}}
+
+%% ------------------------------------------------
+\section{Objective}
+
+Provide the \emph{alternative} to step~3's fitted PCA background: a composite forward model that stacks the existing two clouds on a background that is \textbf{supplied, not fitted} --- the pre-calculated skglm quiet-Sun profile described in \co{cloudtorch\_summary} ($\co{bdata}=\co{new\_fit}-\co{new\_extrafit}$), one fixed spectrum per pixel \emph{and} per frame. This re-instates the \emph{original} cloudtorch approach inside the modular \co{develop/} stack and makes the background a \textbf{mode switch}: step~3 (\emph{fit}, 6 PCA coeffs/pixel) $\leftrightarrow$ step~3a (\emph{given}, 0 background DoF). Same atomic unit --- one pixel $\rightarrow$ one spectrum --- differentiable now w.r.t.\ the cloud parameters \emph{only}.
+
+%% ------------------------------------------------
+\section{The given background (what it is, how it aligns)}
+
+$I_{\rm in}=\co{bdata}=\co{new\_fit}-\co{new\_extrafit}$ from \co{mihi\_rvm\_reconstruction\_averages\_skglm.npz} (shape $(t,y,x,\lambda)$, same as \co{data}): the skglm fit with its \emph{extra} (filament) absorption removed, i.e.\ the incident intensity the cloud model needs --- \emph{no} PCA, \emph{no} free coefficients.
+{\color{warn}\textbf{Live trap (now load-bearing):}} the given background must be carved with the \emph{identical} border$+\lambda$ crop (\co{[100:500]}), the \emph{identical} fit window (\co{ts,ys,xs}), and divided by the \emph{identical} \co{Iqs} as the observed data --- reuse the run's \co{Iqs} from \co{load\_data} (the red-continuum scalar), never a re-derived one, or the transfer $I_{\rm out}=I_{\rm in}e^{-\tau}+S(1-e^{-\tau})$ sits at the wrong absolute level. Memory-map the ($\sim$11.6\,GB) file and slice; keep only the fit-window block on device.
+
+%% ------------------------------------------------
+\section{Composite forward model (given)}
+
+\[
+I_{\rm out}=\mathrm{cloud}_2\!\big(\mathrm{cloud}_1(I_{\rm in})\big),\qquad I_{\rm in}=\co{bdata}_{\rm pix}\ \text{(fixed)} .
+\]
+i.e.\ \co{cmt.model\_synth\_2clouds\_givenbck(x, p\_cloud, I\_in)} with $I_{\rm in}$ a \emph{precomputed constant} tensor --- the \co{background(pca,c)} call is simply dropped. Implementation: refactor the shared tail of step-3 \co{composite\_synth} into a private \co{\_compose(x, I\_in, p\_cloud, loga\_clamp)}; step~3's PCA path calls it after \co{background()}, step~3a calls it directly. \textbf{Step~3 stays byte-for-byte}; 3a adds a sibling entry point \co{composite\_synth\_given(x, I\_in, p\_cloud, \ldots)}. Per-pixel independence is unchanged (a row is one pixel now, one $(x,y,t)$ sample later).
+
+%% ------------------------------------------------
+\section{Parameters --- and why this mode is better-posed}
+
+Per sample: \textbf{0 background} $+$ \textbf{8 cloud} free ($S,\Delta\tau,v_{\rm los},\Delta v$ per cloud; \co{loga} frozen $\rightarrow$ 10 columns), vs $6{+}8$ in step~3. Because the background is \emph{fixed}, the background/cloud \textbf{degeneracy is gone by construction}: the background cannot grow the emission spikes (or fill its H$\alpha$ core) that the clouds then cancel --- the pathology steps~5--6 needed the \co{no\_emission} cap and \co{background\_anchor} to suppress \emph{cannot arise here}. So the \emph{given} mode is intrinsically well-posed and needs only the \emph{light cloud} guardrails ($S,\Delta\tau\!\ge\!0$; $\Delta v\!\ge\!8$; $|v_{\rm los}|\!\le\!v_{\max}$); the background terms are simply switched off.
+
+%% ------------------------------------------------
+\section{Loss, strategy-agnostic, and the toggle}
+
+Reuse \co{chi2\_per\_pixel} \emph{unchanged} (per-pixel vector $+$ scalar mean); no \co{regu*} here. Same outer-layer choice as step~3 (classical \emph{or} PINN); note for later --- in \emph{given} mode a PINN field predicts only the \textbf{8 cloud} numbers (a smaller net), but that is step~4a, not now. The \textbf{mode switch} \co{background\_mode$\in$\{fit,given\}} is the integration hook: step~3a delivers the \emph{given} branch --- \co{composite\_synth\_given} $+$ a light \co{load\_given\_background(cfg, meta)} helper returning the aligned, \co{Iqs}-normalised $(N,L)$ tensor. Wiring the toggle through the PINN and \co{fit\_cube.py} is deferred (steps 4a\,/\,6-integration).
+
+%% ------------------------------------------------
+\section{Decisions (proposed) \& one thing to confirm}
+
+\begin{itemize}
+\item[\textbf{a}] \textbf{Given background $=\co{new\_fit}-\co{new\_extrafit}$} (per \co{cloudtorch\_summary}); used as $I_{\rm in}$ as-is.
+\item[\textbf{b}] \textbf{Strictly fixed} --- 0 background DoF (default). An optional global scale (or low-order residual correction) on $I_{\rm in}$ stays a \emph{deferred lever} if it proves slightly mis-normalised; \emph{not} in 3a.
+\item[\textbf{c}] File path: the reconstruction \co{.npz} sits in the \emph{same directory} as the data cube, so \co{data.bkg\_path} \textbf{defaults to the resolved data path with the filename swapped} (\co{mihi\_rvm\_reconstruction\_averages\_skglm.npz}); a \co{--set data.bkg\_path=\ldots} override remains. Read header-only / sliced, never fully loaded.
+\item[\textbf{d}] \textbf{Confirmed present} on the server (same directory as the data cube) and, per \co{cloudtorch\_summary}, the same $(t,y,x,\lambda)$ shape --- so it supplies $I_{\rm in}$ for every fitted frame \co{ts}.
+\end{itemize}
+
+\vspace{1pt}
+{\footnotesize\color{gry}\rule{\textwidth}{0.4pt}}
+{\sffamily\color{gry}\footnotesize After your review: refactor \co{composite\_model.py} (\co{\_compose} $+$ \co{composite\_synth\_given}), add \co{load\_given\_background}, and a step-3a test cell (load \co{bdata}, align, confirm grads reach only the cloud params, smoke-fit, obs-vs-fit panels, and compare $\chi^2$ against the step-3 fitted background). Then integrate \co{background\_mode} across steps~4 and 6.}
+
+\end{document}

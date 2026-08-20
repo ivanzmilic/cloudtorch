@@ -1,0 +1,96 @@
+% step_4a_outline -- half-page plan for the GIVEN-background PINN (sibling of step 4)
+% Build:  pdflatex step_4a_outline.tex
+\documentclass[10pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{charter}
+\usepackage[scaled=0.88]{helvet}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage[margin=1.55cm,top=1.25cm,bottom=1.0cm]{geometry}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{microtype}
+\usepackage{parskip}
+
+\renewcommand{\baselinestretch}{0.97}
+\setlength{\parskip}{2.3pt}
+\pagestyle{empty}
+\raggedbottom
+
+\definecolor{acc}{HTML}{1B4F72}
+\definecolor{gry}{HTML}{555555}
+
+\titleformat{\section}{\sffamily\bfseries\footnotesize\color{acc}}{\thesection.}{0.4em}{\MakeUppercase}
+\titlespacing{\section}{0pt}{5pt}{1.5pt}
+
+\newcommand{\co}[1]{{\small\texttt{#1}}}
+\setlist[itemize]{leftmargin=1.05em,itemsep=1.0pt,topsep=1.2pt,parsep=0pt}
+
+\begin{document}
+\small
+
+{\sffamily\bfseries\large\color{acc} cloudtorch / develop\, --- Step 4a outline}
+
+\vspace{1pt}
+{\sffamily\color{gry}\footnotesize The step-4 space--time PINN, unchanged, trained on the \emph{fixed given} background of step~3a instead of the fitted PCA background --- the \textbf{given-background sibling} of step~4, and the \emph{intrinsically well-posed} member of the pair. \textbf{Reads as a delta against step~4}: only what differs is stated here; the shared field, physics and loss are exactly as in \co{step\_4\_outline}.}
+
+\vspace{1pt}
+{\footnotesize\color{gry}\rule{\textwidth}{0.4pt}}
+
+%% ------------------------------------------------
+\section{Objective (the delta)}
+
+Keep the step-4 neural field $f_\theta(x,y,t)$ (Fourier features $+$ MLP, trained \emph{through} the two-cloud physics) \emph{exactly as is}, but stack it on the \textbf{pre-calculated fixed} background $I_{\rm in}=\co{bdata}=\co{new\_fit}-\co{new\_extrafit}$ of step~3a rather than the fitted PCA background of step~4. The field then predicts \textbf{only the \emph{free} cloud numbers} (from $S,\Delta\tau,v_{\rm los},\Delta v,\log a$ per cloud --- any of which may be \emph{frozen} to its init, see \S3); the background is \emph{supplied, not learned} $\Rightarrow$ \textbf{0 background DoF}. Because the background is fixed, the background/cloud degeneracy that step~4 still shows on a minority of pixels \textbf{cannot arise by construction} --- this is the well-posed PINN.
+
+%% ------------------------------------------------
+\section{What changes vs step 4 (three edits; everything else identical)}
+
+\begin{itemize}
+\item \textbf{Flexible output width} \co{n\_out}$=$\co{n\_bkg}$+$\co{n\_free}, not a fixed 14. The \emph{given} mode sets \textbf{\co{n\_bkg}=0} (no background columns); \co{n\_free} is the count of \emph{un-frozen} cloud parameters (\S3). Fully free $\Rightarrow$ 8; freezing any parameter shrinks the head further.
+\item \textbf{Route through the given forward.} Feed the field's \co{p\_cloud} to \co{composite\_synth\_given(xl, I\_in, p\_cloud)} instead of \co{composite\_synth(xl, pca, c, p\_cloud)}. The coefficient slice \co{c} is empty and unused; \emph{no} PCA is loaded and \emph{no} background bias anchoring is needed.
+\item \textbf{Supply $I_{\rm in}$.} Load it once with step~3a's \co{load\_given\_background(cfg, meta)} --- aligned to the same window and frames \co{ts}, grad-free; its row order already matches \co{grid\_coords} $(t,y,x)$, so it drops in beside \co{obs\_pt}.
+\end{itemize}
+
+%% ------------------------------------------------
+\section{Flexible output: freeze any physical parameter}
+
+The head width is \emph{spec-driven}. For each of the 10 cloud slots ($S,\Delta\tau,v_{\rm los},\Delta v,\log a$ per cloud) a \co{freeze} set decides \emph{free} vs \emph{frozen}: a \textbf{free} slot emits one pre-activation column and passes through its range transform; a \textbf{frozen} slot emits \emph{nothing} and is inserted as its (spatially/temporally \emph{uniform}) init constant --- exactly the mechanism the model already uses for $\log a$, now generalised to \emph{any} parameter. So \co{n\_free}$\in[0,10]$, \co{n\_out}$=$\co{n\_bkg}$+$\co{n\_free}, and the assembled \co{p\_cloud} is always the full $(N,10)$ the physics needs. Default freeze $=\{\log a_1,\log a_2\}$ ($\Rightarrow$\co{n\_free}=8); freeze e.g.\ a $v_{\rm los}$ or $\Delta\tau$ to hold it at its init everywhere and let the field solve for the rest.
+
+%% ------------------------------------------------
+\section{Unchanged from step 4 (reused verbatim)}
+
+Fourier features with the two bandwidths $(\sigma_{xy},\sigma_t)$ as the space--time regulariser; MLP ($W\!\sim\!128$--$256$, $D\!\sim\!4$, SiLU); the affine output head \textbf{anchored at the step-3 cloud inits} (a frozen slot simply \emph{is} that init); the range transforms on the free slots ($S=S_{\max}\sigma(\cdot)$, $\Delta\tau=\mathrm{softplus}$, $\Delta v=\co{dv\_floor}+\mathrm{softplus}$, $v_{\rm los}$ identity); loss $=$ mean per-pixel $\chi^2$ over the sampled $(x,y,t)$; Adam on $\theta$. \co{chi2\_per\_pixel} is reused unchanged. In short: \textbf{same network, same physics tail, same loss} --- only the background source and the output width differ.
+
+%% ------------------------------------------------
+\section{Knobs = the two bandwidths (simpler here)}
+
+Scan $(\sigma_{xy},\sigma_t)$ as in step~4 (sweet spot there $\sigma_{xy}\!\approx\!4$, $\sigma_t\!=\!2$). With \emph{no} background DoF to trade against, there is nothing for the field to cancel: fewer failure modes, and the degeneracy guardrails steps~5--6 needed (\co{no\_emission} cap, \co{background\_anchor}) are \emph{moot}. The head width \co{n\_bkg+n\_free} carries \emph{both} axes of flexibility, so the \emph{same} module also serves the variable-$K$ PCA \emph{fit} mode later (\co{n\_bkg}$=K$: 1 $=$ mean only, 2 $=$ $+1$, \ldots) --- that wiring is the step 4/6 integration, not here.
+
+%% ------------------------------------------------
+\section{Scaling the bandwidths with CROP / N\_T}
+
+\co{grid\_coords} normalises \emph{every} window to $[-1,1]^3$, so a fixed $(\sigma_{xy},\sigma_t)$ counts oscillations across the \emph{whole field}, not per pixel. To hold the \emph{per-pixel / per-frame} smoothness fixed when you resize the window, scale the bandwidths \textbf{linearly} with the pixel/frame count, relative to the reference (\co{crop\_ref}$=40$, $\sigma_{xy}=4$; \co{n\_t\_ref}$=4$, $\sigma_t=2$):
+\[
+\sigma_{xy}=4.0\,\frac{\mathrm{CROP}}{40}=0.1\,\mathrm{CROP},\qquad
+\sigma_{t}=2.0\,\frac{\mathrm{N\_T}}{4}=0.5\,\mathrm{N\_T}.
+\]
+This is exactly what \co{fit\_cube.sigmas\_for} applies for the server run. Keeping $\sigma$ \emph{fixed} while enlarging the window instead makes the maps \emph{smoother} (fewer features per pixel). Secondary knobs do \emph{not} track window size: raise \co{N\_FREQ} only if you push $\sigma$ much higher; \co{WIDTH}/\co{DEPTH} set model capacity; set \co{BATCH} and more \co{N\_ITERS} as the sample count $N_t\,C_y\,C_x$ grows.
+
+%% ------------------------------------------------
+\section{Test locally, then the server (as step 4)}
+
+Same tiny-instance-first discipline: small crop ($\sim\!24\times24$), 3--5 frames around $t\!=\!13$, config-driven scale, minibatch over coordinates, \co{device} \co{cpu}$\to$\co{cuda} with no code change. Validate the full path (Fourier $\to$ MLP $\to$ \co{composite\_synth\_given} $\to$ loss $\to$ backward $\to$ step: shapes, grads reach the \textbf{free} cloud outputs only (none to frozen slots), NaN-safety, loss drops), then \textbf{compare on the identical crop} against (a) the step-4 fitted-background PINN --- expect similar $\chi^2$ but \emph{no} degenerate pixels; and (b) the step-3a per-pixel given fit --- expect similar $\chi^2$ with \emph{smoother} space--time maps.
+
+%% ------------------------------------------------
+\section{Module \& notebook (after approval)}
+
+Minimal \co{pinn\_model.py} additions: a clean \emph{given} entry (\co{n\_bkg}=0 $\Rightarrow$ \co{forward} returns \co{p\_cloud}; the caller uses \co{composite\_synth\_given}) \emph{and} the \co{freeze}-set generalisation (\S3) replacing the hardcoded $\log a$ freeze, reusing step~3a's \co{load\_given\_background}. A step-4a notebook defaulting to the laptop smoke test --- mirroring \co{step\_3a\_given\_test} for the data/background loading and the step-4 notebook for the field and training loop.
+
+\vspace{1pt}
+{\footnotesize\color{gry}\rule{\textwidth}{0.4pt}}
+{\sffamily\color{gry}\footnotesize Plan only --- no code until you approve. Then the small \co{pinn\_model.py} given-mode entry $+$ a step-4a notebook (tiny-instance default). The full-cube run reuses it on the server: enlarge the config, \co{device=cuda}, same code.}
+
+\end{document}

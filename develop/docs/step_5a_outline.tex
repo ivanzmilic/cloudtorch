@@ -1,0 +1,54 @@
+% step_5a_outline -- half-page plan for the GIVEN-background variant of step 5
+% Build:  pdflatex step_5a_outline.tex
+\documentclass[10pt,a4paper]{article}
+\usepackage[T1]{fontenc}\usepackage[utf8]{inputenc}\usepackage{charter}
+\usepackage[scaled=0.88]{helvet}\usepackage{amsmath}\usepackage{amssymb}
+\usepackage[margin=1.55cm,top=1.25cm,bottom=1.0cm]{geometry}
+\usepackage{xcolor}\usepackage{titlesec}\usepackage{enumitem}\usepackage{microtype}\usepackage{parskip}
+\renewcommand{\baselinestretch}{0.97}\setlength{\parskip}{2.3pt}\pagestyle{empty}\raggedbottom
+\definecolor{acc}{HTML}{1B4F72}\definecolor{gry}{HTML}{555555}
+\titleformat{\section}{\sffamily\bfseries\footnotesize\color{acc}}{\thesection.}{0.4em}{\MakeUppercase}
+\titlespacing{\section}{0pt}{5pt}{1.5pt}
+\newcommand{\co}[1]{{\small\texttt{#1}}}
+\setlist[itemize]{leftmargin=1.05em,itemsep=1.0pt,topsep=1.2pt,parsep=0pt}
+\begin{document}\small
+
+{\sffamily\bfseries\large\color{acc} cloudtorch / develop\, --- Step 5a outline}
+
+\vspace{1pt}
+{\sffamily\color{gry}\footnotesize Explicit regularisation for the \emph{given-background} PINN (step 4a). A short \textbf{delta against step 5}: because the background is fixed (0 DoF), the entire \emph{background-control} half of step 5 disappears --- only the \textbf{cloud} smoothness and bounds remain.}
+
+\vspace{1pt}{\footnotesize\color{gry}\rule{\textwidth}{0.4pt}}
+
+%% ------------------------------------------------
+\section{Objective (the delta)}
+
+Add step 5's explicit penalties to the step-4a loss, but on the cloud fields \emph{only}:
+\[
+\mathcal L=\chi^2 \;+\; \mathcal R_{\rm smooth}\;+\;\mathcal R_{\rm bound}\qquad(\text{no background terms}).
+\]
+Step 5 existed to \emph{tame a degenerate background}; step 4a has none, so 5a is not about the background at all --- it is about giving the \textbf{8 free cloud fields} explicit space/time smoothness and physical hinges on top of the implicit Fourier smoothness.
+
+%% ------------------------------------------------
+\section{Carried over from step 5 (reuse \co{regularizers.py} verbatim)}
+
+The two penalties are \emph{unchanged}, just applied to the cloud groups:
+\begin{itemize}
+\item $\mathcal R_{\rm smooth}=\sum_k\big[w^{xy}_k\langle(\partial_x p_k)^2+(\partial_y p_k)^2\rangle+w^{t}_k\langle(\partial_t p_k)^2\rangle\big]$, autograd coordinate-derivatives (\co{create\_graph=True}), mesh-free $\Rightarrow$ works with random minibatches; one extra backward through the \emph{MLP} only.
+\item $\mathcal R_{\rm bound}=\sum_k\big[w^{\ell}_k\langle\mathrm{ReLU}(\ell_k-p_k)^2\rangle+w^{u}_k\langle\mathrm{ReLU}(p_k-u_k)^2\rangle\big]$, soft hinges per quantity. As in step 5, the step-4 \emph{strict} transforms relax to positivity-only (softplus on $S,\Delta\tau,\Delta v$); $v_{\rm los}$ goes free, its limit owned by a hinge.
+\end{itemize}
+
+%% ------------------------------------------------
+\section{What drops (why 5a is shorter)}
+
+No background means the whole ``control the background'' machinery of step 5 is \emph{gone}: no strong smoothing of the 6 PCA coefficients, \textbf{no} \co{no\_emission} spectrum cap, \textbf{no} background \emph{anchor}. The emission-spike/core-fill degeneracy those fought \emph{cannot arise} (0 background DoF), so 5a keeps only the cloud groups of the \co{REG} config.
+
+%% ------------------------------------------------
+\section{The point: tame the cloud pathologies 4a exposed}
+
+Target exactly what the step-4a maps showed: cap $|v_{\rm los}|\!\le\!v_{\max}$ and $\Delta v$ (hinges) to remove the runaway tails (a few pixels drove $v_{\rm los,1}$ to $-128$, $\Delta v_1$ to $68$ reaching for off-core structure), and apply \textbf{light} space$+$time smoothing to the cloud maps --- most useful on the weakly-constrained $v_{\rm los,1}$. Hinges are simply the \emph{soft} counterpart of 4a's hard \co{freeze}. Off-core fidelity stays background-limited (unchanged --- clouds own the core).
+
+\vspace{1pt}{\footnotesize\color{gry}\rule{\textwidth}{0.4pt}}
+{\sffamily\color{gry}\footnotesize Plan only --- no code until you approve. Then the same \co{regularizers.py} $+$ a \co{REG} dict with cloud groups only (\co{n\_bkg}=0), and a short weight scan in the step-4a notebook. Wiring \co{background\_mode}$+$\co{REG} through \co{fit\_cube} is the step-6 integration.}
+
+\end{document}

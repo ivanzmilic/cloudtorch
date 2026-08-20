@@ -51,21 +51,28 @@ __all__ = [
 ]
 
 # ---- field layout -------------------------------------------------------------
-FIELD_NAMES = ["c0", "c1", "c2", "c3", "c4", "c5",
-               "S1", "dtau1", "vlos1", "dv1", "S2", "dtau2", "vlos2", "dv2"]
-P = len(FIELD_NAMES)                                   # 14
-
 # p_cloud columns [S1,dtau1,vlos1,dv1,loga1, S2,dtau2,vlos2,dv2,loga2] -> keep,
-# dropping the two frozen loga columns (4, 9).
+# dropping the two frozen loga columns (4, 9) whose coordinate derivative is 0.
 _CLOUD_KEEP = [0, 1, 2, 3, 5, 6, 7, 8]
+_CLOUD_NAMES = ["S1", "dtau1", "vlos1", "dv1", "S2", "dtau2", "vlos2", "dv2"]
 
-FIELD_GROUPS = {
-    "bkg":  [0, 1, 2, 3, 4, 5],
-    "S":    [6, 10],
-    "dtau": [7, 11],
-    "vlos": [8, 12],
-    "dv":   [9, 13],
-}
+
+def field_layout(n_bkg=6):
+    """(names, groups, P) of the P = n_bkg + 8 differentiable fields
+    [c_0..c_{n_bkg-1}, S1,dtau1,vlos1,dv1, S2,dtau2,vlos2,dv2] for a given number of
+    background columns. n_bkg=6 is the fitted-PCA-background layout (step 5); n_bkg=0
+    is the given-background mode (step 5a: cloud fields only, no 'bkg'/no_emission/
+    anchor). Cloud groups are simply offset by n_bkg."""
+    names = ["c%d" % i for i in range(n_bkg)] + _CLOUD_NAMES
+    o = n_bkg
+    groups = {"bkg":  list(range(n_bkg)),
+              "S":    [o + 0, o + 4], "dtau": [o + 1, o + 5],
+              "vlos": [o + 2, o + 6], "dv":   [o + 3, o + 7]}
+    return names, groups, len(names)
+
+
+# default (fitted-background) layout, unchanged from before
+FIELD_NAMES, FIELD_GROUPS, P = field_layout(6)
 
 # Default config -- a *starting point* for the weight scan, NOT tuned values.
 # The whole job of step 5 is balancing these against the chi2 scale (see notebook);
@@ -188,24 +195,25 @@ def background_anchor(c, c_ref, weight=1.0):
 
 
 # ====================================================================
-def expand_group_config(reg=None):
+def expand_group_config(reg=None, n_bkg=6):
     """Turn a human-facing grouped REG dict into per-field (P,) weight/bound
-    vectors. Missing entries default to 0 weight and NaN (disabled) bounds, so a
-    partial config just turns terms on. Returns a dict with keys
-    w_xy, w_t, lo, hi, w_lo, w_hi (each a (P,) tensor) plus
-    ('no_weight','no_cap','anchor_weight').
+    vectors for the P = n_bkg + 8 layout. Missing entries default to 0 weight and NaN
+    (disabled) bounds, so a partial config just turns terms on. Pass n_bkg=0 for the
+    given-background mode (cloud-only). Returns a dict with keys w_xy, w_t, lo, hi,
+    w_lo, w_hi (each a (P,) tensor) plus ('no_weight','no_cap','anchor_weight').
     """
     reg = DEFAULT_REG if reg is None else reg
+    _, groups, P = field_layout(n_bkg)
     w_xy = torch.zeros(P); w_t = torch.zeros(P)
     lo = torch.full((P,), float("nan")); hi = torch.full((P,), float("nan"))
     w_lo = torch.zeros(P); w_hi = torch.zeros(P)
     for group, cfg in reg.items():
         if group in ("no_emission", "anchor"):
             continue
-        if group not in FIELD_GROUPS:
-            raise KeyError(f"unknown REG group {group!r}; "
-                           f"expected one of {list(FIELD_GROUPS) + ['no_emission', 'anchor']}")
-        for k in FIELD_GROUPS[group]:
+        if group not in groups:
+            raise KeyError("unknown REG group %r; expected one of %s"
+                           % (group, list(groups) + ["no_emission", "anchor"]))
+        for k in groups[group]:
             w_xy[k] = cfg.get("w_xy", 0.0)
             w_t[k]  = cfg.get("w_t", 0.0)
             if "lo" in cfg:
@@ -222,16 +230,18 @@ def expand_group_config(reg=None):
 
 
 # ====================================================================
-def regularization_loss(c, p_cloud, coords, pca, reg=None, weights=None, c_ref=None):
+def regularization_loss(c, p_cloud, coords, pca=None, reg=None, weights=None, c_ref=None):
     """Assemble the full regulariser R = R_smooth + R_bound + no_emission + anchor
     for one field evaluation. Add its ['total'] to the chi2 data term.
 
-    c, p_cloud : field(coords) outputs.
+    c, p_cloud : field(coords) outputs. In the given-background mode c is (N, 0), so
+                 only R_smooth + R_bound on the cloud fields survive.
     coords     : the SAME (N,3) tensor fed to the field, with requires_grad=True.
-    pca        : the fixed PCA basis (for no_emission / anchor).
+    pca        : the fixed PCA basis (for no_emission / anchor). None (given mode) or
+                 a config with those terms off -> both are skipped.
     reg        : grouped REG config (defaults to DEFAULT_REG).
-    weights    : optional pre-expanded config from expand_group_config(reg) -- pass
-                 it to avoid re-expanding every iteration in the training loop.
+    weights    : optional pre-expanded config from expand_group_config(reg, n_bkg) --
+                 pass it to avoid re-expanding every iteration in the training loop.
     c_ref      : optional (N,K) or (K,) reference background coeffs for the anchor
                  (the filament-free last-N-frame background, projected). MUST be
                  sliced to the SAME pixels as c when minibatching. If None the
@@ -239,11 +249,12 @@ def regularization_loss(c, p_cloud, coords, pca, reg=None, weights=None, c_ref=N
 
     Returns a dict {'smooth','bound','no_emission','anchor','total'} of scalars.
     """
-    w = expand_group_config(reg) if weights is None else weights
+    w = expand_group_config(reg, n_bkg=c.shape[1]) if weights is None else weights
     fields = assemble_fields(c, p_cloud)
     r_smooth = smoothness_penalty(fields, coords, w["w_xy"], w["w_t"])
     r_bound  = hinge_bounds(fields, w["lo"], w["hi"], w["w_lo"], w["w_hi"])
-    r_noem   = no_emission(pca, c, cap=w["no_cap"], weight=w["no_weight"])
+    r_noem   = (no_emission(pca, c, cap=w["no_cap"], weight=w["no_weight"])
+                if pca is not None else c.new_zeros(()))
     r_anchor = (background_anchor(c, c_ref, weight=w["anchor_weight"])
                 if c_ref is not None else c.new_zeros(()))
     return {"smooth": r_smooth, "bound": r_bound, "no_emission": r_noem,

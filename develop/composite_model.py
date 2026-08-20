@@ -1,11 +1,24 @@
 """
-composite_model.py -- Step 3 of the develop/ plan (see instructions.md).
+composite_model.py -- Steps 3 & 3a of the develop/ plan (see instructions.md).
 
-The composite forward model: two absorbing clouds stacked on a *fitted* PCA
-background, as a single autograd-differentiable per-pixel model,
+The composite forward model: two absorbing clouds stacked on a background, as a
+single autograd-differentiable per-pixel model,
 
-        I_in  = mu + c @ V                         (step-2 background)
+        I_in  = mu + c @ V                         (step-2 fitted PCA background)
         I_out = cloud_2( cloud_1( I_in ) )         (existing two-cloud transfer)
+
+The background is a user-selectable MODE with two sibling entry points sharing the
+same physics tail (`_compose`):
+
+  * step 3  -- `composite_synth(x, pca, coeffs, p_cloud)`  : I_in fitted from the
+    PCA basis (6 free coefficients per pixel);
+  * step 3a -- `composite_synth_given(x, I_in, p_cloud)`   : I_in SUPPLIED as a
+    fixed, pre-calculated tensor (the skglm quiet-Sun profile
+    bdata = new_fit - new_extrafit), 0 background free parameters.
+
+Because the given-background path fixes I_in, the background/cloud degeneracy that
+steps 5-6 fought (emission spikes / core-filling the clouds cancel) cannot arise
+there: only the cloud parameters are free.
 
 The atomic unit is ONE pixel -> ONE spectrum; everything is simply batched over an
 arbitrary set of pixels (rows), with NO coupling between them. That per-pixel
@@ -41,7 +54,7 @@ from background_model import background   # noqa: E402
 
 __all__ = [
     "make_param", "init_cloud_params", "combine_cloud_params",
-    "composite_synth", "chi2_per_pixel",
+    "composite_synth", "composite_synth_given", "chi2_per_pixel",
 ]
 
 # Layout of the stacked cloud-parameter tensor expected by
@@ -53,8 +66,8 @@ _LOGA_COLS = (4, 9)
 
 # Defaults mirror the existing main_gpu notebook.
 _CLOUD_INIT = {
-    "c1_S": 0.2, "c1_tau": 4.5, "c1_vlos": -20.0, "c1_dv": 12.0, "c1_loga": -4.0,
-    "c2_S": 0.6, "c2_tau": 4.5, "c2_vlos":  20.0, "c2_dv": 12.0, "c2_loga": -5.0,
+    "c1_S": 0.3, "c1_tau": 4.5, "c1_vlos": -20.0, "c1_dv": 12.0, "c1_loga": -4.0,
+    "c2_S": 0.3, "c2_tau": 4.5, "c2_vlos":  20.0, "c2_dv": 12.0, "c2_loga": -4.0,
 }
 
 
@@ -105,8 +118,20 @@ def _clamp_loga(p_cloud, loga_clamp):
 
 
 # ====================================================================
+def _compose(x, I_in, p_cloud, loga_clamp):
+    """Shared physics tail of both background modes: clamp log a, then push the
+    incident intensity I_in (n_pix, L) through the two-cloud transfer.
+
+    I_in is treated as-is -- whatever produced it (fitted PCA background or a
+    supplied fixed tensor). Differentiable w.r.t. p_cloud, and w.r.t. I_in when
+    I_in carries a graph (it does not in the given-background mode)."""
+    p_cloud = _clamp_loga(p_cloud, loga_clamp)
+    return cmt.model_synth_2clouds_givenbck(x, p_cloud, I_in)
+
+
+# ====================================================================
 def composite_synth(x, pca, coeffs, p_cloud, loga_clamp=(-6.0, 0.0)):
-    """Composite forward model: two clouds on the fitted PCA background.
+    """Step 3 -- composite forward model: two clouds on the FITTED PCA background.
 
     Parameters
     ----------
@@ -126,8 +151,37 @@ def composite_synth(x, pca, coeffs, p_cloud, loga_clamp=(-6.0, 0.0)):
     (n_pix, L) synthetic spectra. Differentiable w.r.t. BOTH coeffs and p_cloud.
     """
     I_in = background(pca, coeffs)                       # (n_pix, L)
-    p_cloud = _clamp_loga(p_cloud, loga_clamp)
-    return cmt.model_synth_2clouds_givenbck(x, p_cloud, I_in)
+    return _compose(x, I_in, p_cloud, loga_clamp)
+
+
+# ====================================================================
+def composite_synth_given(x, I_in, p_cloud, loga_clamp=(-6.0, 0.0)):
+    """Step 3a -- composite forward model on a GIVEN (pre-calculated) background.
+
+    Identical physics to composite_synth, but the incident intensity I_in is
+    SUPPLIED directly as a fixed tensor rather than reconstructed from the PCA
+    basis -- there are NO background free parameters. Use it with the
+    pre-calculated skglm quiet-Sun profile (bdata = new_fit - new_extrafit; see
+    given_background.load_given_background), which must already share the fit
+    window's lambda-crop and Iqs normalisation with the observed data.
+
+    Parameters
+    ----------
+    x : [wavelength_array, line_center_array]
+        As cloud_model_torch expects.
+    I_in : (n_pix, L) tensor
+        The fixed incident background, one spectrum per pixel. Typically a plain
+        (grad-free) tensor; the fit only moves p_cloud.
+    p_cloud : (n_pix, 10) tensor
+        Stacked cloud parameters (combine_cloud_params).
+    loga_clamp : (lo, hi) or None
+        Clamp on the two log a columns for stability (default [-6, 0]).
+
+    Returns
+    -------
+    (n_pix, L) synthetic spectra. Differentiable w.r.t. p_cloud.
+    """
+    return _compose(x, I_in, p_cloud, loga_clamp)
 
 
 # ====================================================================

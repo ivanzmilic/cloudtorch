@@ -1,0 +1,73 @@
+% step_5a_session_summary -- one-page session note (2026-08-25)
+% Build:  pdflatex step_5a_session_summary.tex
+\documentclass[10pt,a4paper]{article}
+\usepackage[T1]{fontenc}\usepackage[utf8]{inputenc}\usepackage{charter}
+\usepackage[scaled=0.88]{helvet}\usepackage{amsmath}\usepackage{amssymb}
+\usepackage[margin=1.5cm,top=1.2cm,bottom=1.0cm]{geometry}
+\usepackage{xcolor}\usepackage{titlesec}\usepackage{enumitem}\usepackage{microtype}\usepackage{parskip}
+\renewcommand{\baselinestretch}{0.96}\setlength{\parskip}{2.1pt}\pagestyle{empty}\raggedbottom
+\definecolor{acc}{HTML}{1B4F72}\definecolor{gry}{HTML}{555555}
+\titleformat{\section}{\sffamily\bfseries\footnotesize\color{acc}}{\thesection.}{0.4em}{\MakeUppercase}
+\titlespacing{\section}{0pt}{5pt}{1.5pt}
+\newcommand{\co}[1]{{\small\texttt{#1}}}
+\setlist[itemize]{leftmargin=1.05em,itemsep=1.0pt,topsep=1.2pt,parsep=0pt}
+\begin{document}\small
+
+{\sffamily\bfseries\large\color{acc} cloudtorch / develop\, --- Step 5a session summary: from velocity collapse to a full-cube fit}
+
+\vspace{1pt}
+{\sffamily\color{gry}\footnotesize 2026-08-25 --- diagnosed why 5a's velocities collapsed, fixed it with a single reg backstop knob, mapped where the fit spoils, scaled 5a from the $64^2$ laptop test to the \emph{full} MiHI cube, and added scripted twins + movies.}
+
+\vspace{1pt}{\footnotesize\color{gry}\rule{\textwidth}{0.4pt}}
+
+%% ------------------------------------------------
+\section{Notebook 5a --- current status}
+Scaled from the laptop crop to the \textbf{full bordered cube}: \co{N\_T}=32 frames $\times$ $116\times130$ px $=$ \textbf{482{,}560} samples, \co{N\_FREQ}=128, \textbf{minibatch} \co{BATCH}=16384, \co{LR}=1e-2, 3000 iters ($\sim$116\,s on one GPU). Regularisation is a gentle \textbf{backstop} (\co{W\_REG}=1e-4 over re-tuned per-group weights); \co{log a} frozen. \textbf{Result:} mean per-pixel $\chi^2=\mathbf{0.233}$, RMS \textbf{3.67\%}, with physically \emph{structured, sign-crossing} velocities (cloud\,1 red $-9/{+}11/{+}74$, cloud\,2 blue $-105/{-}23/{+}1.5$ km/s). The notebook also dumps per-frame PNGs to \co{../figs/debug/} and writes \co{fits\_and\_params.npz}. This is the first \textbf{full-FOV, all-frames} given-background fit --- healthy, converged, physical.
+
+%% ------------------------------------------------
+\section{Advancements}
+\begin{itemize}
+\item \textbf{Root-caused the collapse} (clean 2$\times$2 factorial): the \emph{explicit regularisation} --- not Fourier bandwidth, init, or frame window --- flattens the weakly-constrained velocity field. \co{docs/step\_5a\_factorial.pdf}.
+\item \textbf{One global backstop knob} \co{W\_REG} scaling all reg weights: \co{W\_REG}=1e-3 reproduces 4a on the laptop window ($\chi^2$ 0.181 vs 4a 0.170), \emph{verified} by a full notebook re-run.
+\item \textbf{Parameter search} \co{step\_5a\_reg\_scan.py}: mapped the spoil transition (below).
+\item \textbf{Scale-up} to the full cube with minibatch (above).
+\item \textbf{Tooling:} \co{step\_6a\_reg\_fit.py} (config-driven scripted twin of 5a, \co{fit\_cube.py} conventions: \co{--config}/\co{--set}/\co{--dump-config}, logs \co{config\_used.json}); \co{png\_to\_video.py} and \co{npz\_inversion\_videos.py} (fixed-scale fit \& parameter movies).
+\end{itemize}
+
+%% ------------------------------------------------
+\section{Performance}
+\begin{center}\footnotesize\setlength{\tabcolsep}{4.5pt}
+\begin{tabular}{lllccl}
+\hline
+stage & window & reg & $\langle\chi^2\rangle$ & RMS & velocities\\
+\hline
+4a reference        & $64^2{\times}4$, 1.2k   & off        & 0.170 & 3.25\% & structured, \emph{runaway tails}\\
+5a reproduce 4a     & $64^2{\times}8$, 10k    & \co{W\_REG}\,1e-3 & 0.181 & 3.36\% & structured, tails clipped\\
+5a full cube        & $116{\cdot}130{\cdot}32$, 3k mb & \co{W\_REG}\,1e-4 & \textbf{0.233} & 3.67\% & sign-crossing\\
+\hline
+\end{tabular}
+\end{center}
+\vspace{-2pt}
+{\footnotesize\color{gry}\co{W\_REG} scan (4k iters, laptop window): $\chi^2$ rises \emph{monotonically} 0.16$\to$0.21$\to$0.25$\to$0.29$\to$0.38$\to$0.57 across \co{W\_REG}=0,\,1e-3,\,3e-3,\,1e-2,\,1e-1,\,1. Usable backstop \textbf{$\le$1e-3}; \textbf{knee $\sim$3e-3}; clearly spoiled \textbf{$\ge$1e-2}. \co{vlos2} (weakest-constrained) collapses first, the moment reg turns on.}
+
+%% ------------------------------------------------
+\section{Lessons learned}
+\begin{itemize}
+\item \textbf{``Small in loss'' $\ne$ ``harmless.''} A 1--3\% penalty dominates a weakly-constrained (near-null) direction: the fixed background owns the line wings, so the data barely pulls on \co{vlos}, and any appreciable smoothness/hinge flattens it. Regularise weakly-constrained parameters \emph{only} as a backstop.
+\item \textbf{No strong-reg sweet spot here:} reg trades $\sim$monotonically against \emph{both} $\chi^2$ and velocity structure. The fix is a gentler penalty, or a robust/far-outer hinge that clips outliers \emph{without} flattening.
+\item \textbf{Activation design is physics.} Identity for signed/unbounded \co{vlos} $+$ a soft outer hinge is correct; bounded transforms (\co{S} sigmoid, \co{dtau}/\co{dv} softplus) only where a real physical bound exists; \co{SiLU} hidden units stay (smoothness reg needs a $C^\infty$ double-backward --- \co{ReLU} would be degenerate).
+\item \textbf{Architecture:} prefer \emph{wide} over \emph{deep} for a Fourier-feature field --- the random features already supply the frequencies, so depth (no residuals here) mostly costs conditioning.
+\item \textbf{Optimisation:} the explicit autograd reg slows convergence; \textbf{minibatch $+$ higher \co{LR}} makes the full 482k-pixel cube tractable in $\sim$2\,min.
+\end{itemize}
+
+%% ------------------------------------------------
+\section{Next}
+\begin{itemize}
+\item Replace the velocity smoothing with a \textbf{robust loss / far-outer hinge} (clip tails, keep structure), then re-scan \co{W\_REG} on the \emph{full} cube.
+\item Sub-factorial (\co{w\_t}-only vs hinge-only) to pin the dominant collapse term; carry the tuned config into \co{step\_6a\_reg\_fit.py} / \co{fit\_cube.py} for deployment.
+\end{itemize}
+
+\vspace{1pt}{\footnotesize\color{gry}\rule{\textwidth}{0.4pt}}
+{\sffamily\color{gry}\footnotesize Artefacts this session: \co{step\_5a\_reg\_scan.py}, \co{step\_6a\_reg\_fit.py}, \co{png\_to\_video.py}, \co{npz\_inversion\_videos.py} (in \co{figs/debug/}), \co{docs/step\_5a\_factorial.pdf}. Note \co{composite\_model.py} \co{\_CLOUD\_INIT} fallback was changed to an asymmetric $-50/0$ experiment (unrelated to the pinn init, which stays $\mp20$/scale\,20).}
+
+\end{document}

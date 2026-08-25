@@ -1,0 +1,67 @@
+% step_5a_debug -- half-page debug note: relaxing spatial reg on the 5a given-bkg PINN
+% Build:  pdflatex step_5a_debug.tex
+\documentclass[10pt,a4paper]{article}
+\usepackage[T1]{fontenc}\usepackage[utf8]{inputenc}\usepackage{charter}
+\usepackage[scaled=0.88]{helvet}\usepackage{amsmath}\usepackage{amssymb}
+\usepackage[margin=1.55cm,top=1.25cm,bottom=1.0cm]{geometry}
+\usepackage{xcolor}\usepackage{titlesec}\usepackage{enumitem}\usepackage{microtype}\usepackage{parskip}
+\renewcommand{\baselinestretch}{0.97}\setlength{\parskip}{2.3pt}\pagestyle{empty}\raggedbottom
+\definecolor{acc}{HTML}{1B4F72}\definecolor{gry}{HTML}{555555}
+\titleformat{\section}{\sffamily\bfseries\footnotesize\color{acc}}{\thesection.}{0.4em}{\MakeUppercase}
+\titlespacing{\section}{0pt}{5pt}{1.5pt}
+\newcommand{\co}[1]{{\small\texttt{#1}}}
+\setlist[itemize]{leftmargin=1.05em,itemsep=1.0pt,topsep=1.2pt,parsep=0pt}
+\begin{document}\small
+
+{\sffamily\bfseries\large\color{acc} cloudtorch / develop\, --- Step 5a debug: relaxing spatial regularisation}
+
+\vspace{1pt}
+{\sffamily\color{gry}\footnotesize 2026-08-24 --- fits from \co{step\_5a\_reg\_test.ipynb} (cell 20) were unsatisfactory. Hypothesis tested: the explicit \textbf{spatial} smoothness was over-constraining the cloud maps. Action: relax it $100\times$ and re-run to recover a good data fit before re-tightening.}
+
+\vspace{1pt}{\footnotesize\color{gry}\rule{\textwidth}{0.4pt}}
+
+%% ------------------------------------------------
+\section{What was run}
+
+The step-5a notebook config reproduced verbatim (given fixed background, \co{n\_bkg}=0; \co{CROP}=64, \co{N\_T}=8; $10^4$ cosine-annealed Adam iters), changing \emph{only} the spatial weight $w^{xy}\!:\,10^{-3}\!\to\!10^{-5}$ across all four cloud groups (\co{S},\co{dtau},\co{vlos},\co{dv}). Temporal $w^{t}$ and the soft hinges were left untouched.
+
+%% ------------------------------------------------
+\section{Result: essentially no change}
+
+\begin{center}\small
+\begin{tabular}{lcccc}
+\hline
+run & $\langle\chi^2\rangle$ & RMS resid & $v_{1}$ [min/med/max] & $v_{2}$ [min/med/max]\\
+\hline
+$w^{xy}=10^{-3}$ (baseline) & 0.460 & 5.36\% & $-79.8/-24.4/-22.7$ & $11.1/22.1/23.1$\\
+$w^{xy}=10^{-5}$ ($100\times$) & 0.416 & 5.09\% & $-76.9/-24.9/-21.4$ & $10.9/22.2/22.9$\\
+\hline
+\end{tabular}
+\end{center}
+
+$\chi^2$ fell only because the penalty itself shrank; the \emph{data} fit did not improve. The parameter maps are unchanged: \co{vlos1} uniformly blue, \co{vlos2} uniformly red, neither crossing zero, both pinned within $\sim\!2$\,km/s of the $\mp20$ initialisation. The pixel spectra still miss the blue-wing asymmetry (pix 2575, 1608).
+
+%% ------------------------------------------------
+\section{Why relaxing reg could not help (the finding)}
+
+There was no \emph{binding} spatial regularisation to relax. In both runs the total reg is only ${\sim}2.5\%$ of the loss ($0.011$ vs data $0.416$) and every hinge is inactive (velocities sit at $\mp22$, far inside the $\pm120$ range limit and below the $\Delta v\!=\!45$ cap). The fit is therefore \textbf{already effectively unregularised} --- so ``loosen reg, then tighten'' cannot get traction. The mediocre fit and the flat velocities are intrinsic to the \emph{setup}, not the penalties.
+
+%% ------------------------------------------------
+\section{Root cause of the velocity collapse}
+
+The two clouds collapse to a symmetric $\mp22$\,km/s pair because (i) the \textbf{given background already owns the line wings}, where the Doppler signal lives, so the clouds get almost no velocity leverage; and (ii) the \textbf{symmetric $\mp20$ init} is a flat spot the data gradient never leaves --- line \emph{depth} (via $S,\Delta\tau$) dominates, velocity is second-order. So $S/\Delta\tau$ carry all the fitting (real fibril structure) while the Doppler DoF stay dead.
+
+%% ------------------------------------------------
+\section{Loss curve}
+
+Converged by ${\sim}1$--$2$k iters (8.16 $\to$ ${\sim}0.42$), then flat for ${\sim}8$k --- the extra $90\%$ of the 711\,s run buys nothing (a degeneracy floor, not the noise floor: RMS $5\%$ is well above photon noise). Periodic order-of-magnitude spikes coincide with reg spikes: the autograd-smoothness double-backward occasionally emits a large gradient, Adam overshoots, then recovers.
+
+%% ------------------------------------------------
+\section{Next lever (not a reg knob)}
+
+Attack the \textbf{velocity init / wing access}, one change at a time: \textbf{(1)} asymmetric \co{vlos} init (e.g. $-5$ / $+35$) or a per-pixel line-bisector warm-start, to escape the symmetric trap --- cheapest test; \textbf{(2)} if needed, let the clouds reach the wings the background currently claims. Only after the velocity field moves should the smoothness/hinge weights be revisited.
+
+\vspace{1pt}{\footnotesize\color{gry}\rule{\textwidth}{0.4pt}}
+{\sffamily\color{gry}\footnotesize Notebook \co{cell-3} now carries \co{W\_XY=1e-5} behind a single tightening knob; the \co{../figs/step\_5a\_pinn\_*.pdf} fit-image and parameter-map figures are refreshed.}
+
+\end{document}

@@ -66,8 +66,8 @@ _LOGA_COLS = (4, 9)
 
 # Defaults mirror the existing main_gpu notebook.
 _CLOUD_INIT = {
-    "c1_S": 0.3, "c1_tau": 4.5, "c1_vlos": -20.0, "c1_dv": 12.0, "c1_loga": -4.0,
-    "c2_S": 0.3, "c2_tau": 4.5, "c2_vlos":  20.0, "c2_dv": 12.0, "c2_loga": -4.0,
+    "c1_S": 0.3, "c1_tau": 10.0, "c1_vlos": -50.0, "c1_dv": 10.0, "c1_loga": -5.0,
+    "c2_S": 0.2, "c2_tau": 1.0, "c2_vlos":  0.0, "c2_dv": 10.0, "c2_loga": -5.0,
 }
 
 

@@ -48,8 +48,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_NPZ = "/dat/milic/MiHI_filament/inv_results/fits_and_params.npz"
 
 # canonical cloud columns; the 8 shown (loga1/loga2 are frozen -> constant, skipped)
-PARAM_SPECS = [("S1", 0, "viridis"), ("dtau1", 1, "viridis"), ("vlos1", 2, "seismic"), ("dv1", 3, "magma"),
-               ("S2", 5, "viridis"), ("dtau2", 6, "viridis"), ("vlos2", 7, "seismic"), ("dv2", 8, "magma")]
+PARAM_SPECS = [("S1", 0, "viridis"), ("dtau1", 1, "viridis"), ("vlos1", 2, "bwr"), ("dv1", 3, "magma"),
+               ("S2", 5, "viridis"), ("dtau2", 6, "viridis"), ("vlos2", 7, "bwr"), ("dv2", 8, "magma")]
 
 # which dtau column weights each vlos column (a cloud's velocity is only meaningful where
 # that same cloud has opacity): vlos1(col 2) <- dtau1(col 1); vlos2(col 7) <- dtau2(col 6)
@@ -186,7 +186,7 @@ def main():
         for nm, j, cmap in PARAM_SPECS:
             lo = float(np.nanpercentile(params[..., j], plo))
             hi = float(np.nanpercentile(params[..., j], phi))
-            plim[nm] = sym(lo, hi) if cmap == "seismic" else (lo, hi)
+            plim[nm] = sym(lo, hi) if (cmap == "seismic" or cmap == 'bwr') else (lo, hi)
 
         def render_param(t):
             fig, ax = plt.subplots(2, 4, figsize=(18, 8), dpi=args.dpi, constrained_layout=True)

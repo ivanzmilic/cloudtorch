@@ -18,6 +18,13 @@ ALL time and held fixed for the whole clip, so colours/colourbars never jump bet
 frames. vlos panels use a symmetric seismic scale; obs & fit share a scale per
 wavelength; residuals get a symmetric scale per wavelength.
 
+OPTIONAL tau-weighting (--tau-weight-vlos): a cloud's velocity is only meaningful where
+that cloud has opacity, so fade each vlos map by its own dtau. The weight is the
+absorption fraction w = 1 - exp(-dtau/tau_scale): 0 where dtau=0, saturating at 1 for
+large tau (never blows up). Two looks: "alpha" (default) fades optically-thin pixels
+toward a neutral grey; "scale" multiplies vlos by w so thin pixels go to 0 (white on
+the seismic map). Only the vlos1/vlos2 panels are touched.
+
 The file stores no grid shape, so pass it with --shape Nt,Ny,Nx (default 32,116,130,
 the full bordered MiHI FOV; N must equal Nt*Ny*Nx). Flatten order is (t, y, x) to
 match the cloudtorch pipeline (data.reshape(Nt,Ny,Nx,L)).
@@ -26,6 +33,7 @@ Usage:
     python npz_inversion_videos.py                                   # defaults
     python npz_inversion_videos.py --npz /path/f.npz --shape 32,116,130 --fps 6
     python npz_inversion_videos.py --dwl 120 --prefix inv --fits-only
+    python npz_inversion_videos.py --params-only --tau-weight-vlos --prefix inversion_tauw
 """
 import os
 import argparse
@@ -42,6 +50,10 @@ DEFAULT_NPZ = "/dat/milic/MiHI_filament/inv_results/fits_and_params.npz"
 # canonical cloud columns; the 8 shown (loga1/loga2 are frozen -> constant, skipped)
 PARAM_SPECS = [("S1", 0, "viridis"), ("dtau1", 1, "viridis"), ("vlos1", 2, "seismic"), ("dv1", 3, "magma"),
                ("S2", 5, "viridis"), ("dtau2", 6, "viridis"), ("vlos2", 7, "seismic"), ("dv2", 8, "magma")]
+
+# which dtau column weights each vlos column (a cloud's velocity is only meaningful where
+# that same cloud has opacity): vlos1(col 2) <- dtau1(col 1); vlos2(col 7) <- dtau2(col 6)
+VLOS_TAU = {2: 1, 7: 6}
 
 
 # ----------------------------------------------------------------------- helpers
@@ -81,6 +93,15 @@ def sym(lo, hi):
     m = max(abs(lo), abs(hi)); return -m, m
 
 
+def opacity_weight(dtau, tau_scale):
+    """Cloud-visibility weight in [0, 1): 0 where dtau=0, rising toward 1 as dtau grows.
+
+    w = 1 - exp(-dtau / tau_scale) is the fraction of light the cloud absorbs, so it
+    saturates smoothly at 1 for large tau instead of running to infinity. tau_scale is
+    the soft-knee: w ~= 0.63 at dtau = tau_scale."""
+    return 1.0 - np.exp(-np.maximum(dtau, 0.0) / float(tau_scale))
+
+
 # ----------------------------------------------------------------------- main
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
@@ -95,6 +116,16 @@ def main():
     ap.add_argument("--dpi", type=int, default=110)
     ap.add_argument("--fits-only", action="store_true")
     ap.add_argument("--params-only", action="store_true")
+    # --- vlos tau-weighting: down-weight velocity where the cloud is optically thin ---
+    ap.add_argument("--tau-weight-vlos", action="store_true",
+                    help="weight each vlos panel by its cloud's opacity w = 1 - exp(-dtau/tau_scale)")
+    ap.add_argument("--tau-weight-mode", choices=("alpha", "scale"), default="alpha",
+                    help="alpha: fade thin pixels toward --tau-fade-color; "
+                         "scale: shrink vlos toward 0 (fades to white on seismic)")
+    ap.add_argument("--tau-scale", type=float, default=1.0,
+                    help="opacity soft-knee for the weight (w ~= 0.63 at dtau = tau_scale)")
+    ap.add_argument("--tau-fade-color", default="0.8",
+                    help="matplotlib colour shown through fully-faded pixels (alpha mode)")
     args = ap.parse_args()
 
     Nt, Ny, Nx = (int(v) for v in args.shape.split(","))
@@ -162,12 +193,25 @@ def main():
             ax = ax.ravel()
             for k, (nm, j, cmap) in enumerate(PARAM_SPECS):
                 lo, hi = plim[nm]
-                h = ax[k].imshow(params[t, :, :, j].T, origin="lower", cmap=cmap, vmin=lo, vmax=hi)
-                ax[k].set_title("%s   [%.2f, %.2f]" % (nm, lo, hi))
+                field = params[t, :, :, j].T
+                kw = dict(origin="lower", cmap=cmap, vmin=lo, vmax=hi)
+                weighted = args.tau_weight_vlos and j in VLOS_TAU
+                if weighted:
+                    w = opacity_weight(params[t, :, :, VLOS_TAU[j]].T, args.tau_scale)
+                    if args.tau_weight_mode == "scale":
+                        field = field * w                     # velocity shrinks toward 0 (white)
+                    else:                                     # alpha: fade thin pixels to grey
+                        ax[k].set_facecolor(args.tau_fade_color)
+                        kw["alpha"] = w
+                h = ax[k].imshow(field, **kw)
+                tag = r" ($\tau$-w)" if weighted else ""
+                ax[k].set_title("%s%s   [%.2f, %.2f]" % (nm, tag, lo, hi))
                 ax[k].set_xticks([]); ax[k].set_yticks([])
                 fig.colorbar(h, ax=ax[k], fraction=0.046, pad=0.02)
-            fig.suptitle("inferred cloud parameters -- frame %d / %d (fixed scales; log a frozen)"
-                         % (t, Nt - 1), fontsize=14)
+            extra = (r" -- vlos $\tau$-weighted (w=1-e$^{-\tau/%.1f}$, %s)"
+                     % (args.tau_scale, args.tau_weight_mode)) if args.tau_weight_vlos else ""
+            fig.suptitle("inferred cloud parameters -- frame %d / %d (fixed scales; log a frozen)%s"
+                         % (t, Nt - 1, extra), fontsize=14)
             img = fig_to_bgr(fig); plt.close(fig); return img
 
         out = os.path.join(args.outdir, "%s_params.mp4" % args.prefix)

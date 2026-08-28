@@ -3,11 +3,13 @@
 
 Sibling of png_to_video.py: instead of stitching existing PNGs, this renders each
 time frame with matplotlib and encodes the frames with OpenCV (same VideoWriter
-path). It reads a single .npz holding the flattened (t*y*x, ...) arrays
+path). It reads a single .npz holding the arrays
 
-    obs    (N, L)   observed spectra
-    fits   (N, L)   fitted   spectra
-    params (N, 10)  inferred cloud params [S,dtau,vlos,dv,loga] x 2 (canonical order)
+    obs    (Nt, Ny, Nx, L)    observed spectra
+    fits   (Nt, Ny, Nx, L)    fitted   spectra
+    params (Nt, Ny, Nx, 10)   inferred cloud params [S,dtau,vlos,dv,loga] x 2 (canonical)
+
+Legacy files that store these flattened as (t*y*x, ...) are still accepted (see --shape).
 
 and writes TWO videos:
     * <prefix>_fits.mp4    obs / fit / residual at a few wavelengths
@@ -25,15 +27,17 @@ large tau (never blows up). Two looks: "alpha" (default) fades optically-thin pi
 toward a neutral grey; "scale" multiplies vlos by w so thin pixels go to 0 (white on
 the seismic map). Only the vlos1/vlos2 panels are touched.
 
-The file stores no grid shape, so pass it with --shape Nt,Ny,Nx (default 32,116,130,
-the full bordered MiHI FOV; N must equal Nt*Ny*Nx). Flatten order is (t, y, x) to
-match the cloudtorch pipeline (data.reshape(Nt,Ny,Nx,L)).
+The grid shape is read straight from the file: the arrays are stored as full
+(Nt, Ny, Nx, ...) cubes. Only a legacy file whose arrays are flat (t*y*x, ...) needs
+--shape Nt,Ny,Nx (flatten order (t, y, x); N must equal Nt*Ny*Nx); --shape is ignored
+when the arrays already carry their shape.
 
 Usage:
     python npz_inversion_videos.py                                   # defaults
-    python npz_inversion_videos.py --npz /path/f.npz --shape 32,116,130 --fps 6
+    python npz_inversion_videos.py --npz /path/f.npz --fps 6
     python npz_inversion_videos.py --dwl 120 --prefix inv --fits-only
     python npz_inversion_videos.py --params-only --tau-weight-vlos --prefix inversion_tauw
+    python npz_inversion_videos.py --shape 32,116,130 --npz legacy_flat.npz   # legacy
 """
 import os
 import argparse
@@ -48,8 +52,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_NPZ = "/dat/milic/MiHI_filament/inv_results/fits_and_params.npz"
 
 # canonical cloud columns; the 8 shown (loga1/loga2 are frozen -> constant, skipped)
-PARAM_SPECS = [("S1", 0, "viridis"), ("dtau1", 1, "viridis"), ("vlos1", 2, "bwr"), ("dv1", 3, "magma"),
-               ("S2", 5, "viridis"), ("dtau2", 6, "viridis"), ("vlos2", 7, "bwr"), ("dv2", 8, "magma")]
+PARAM_SPECS = [("S1", 0, "viridis"), ("dtau1", 1, "viridis"), ("vlos1", 2, "seismic"), ("dv1", 3, "magma"),
+               ("S2", 5, "viridis"), ("dtau2", 6, "viridis"), ("vlos2", 7, "seismic"), ("dv2", 8, "magma")]
 
 # which dtau column weights each vlos column (a cloud's velocity is only meaningful where
 # that same cloud has opacity): vlos1(col 2) <- dtau1(col 1); vlos2(col 7) <- dtau2(col 6)
@@ -102,12 +106,33 @@ def opacity_weight(dtau, tau_scale):
     return 1.0 - np.exp(-np.maximum(dtau, 0.0) / float(tau_scale))
 
 
+def to_cube(a, name, legacy_shape):
+    """Return array a as (Nt, Ny, Nx, C).
+
+    Modern files already store 4-D cubes -> passed straight through and the shape is
+    taken from the file. A legacy flat (t*y*x, C) array is reshaped with legacy_shape
+    (Nt, Ny, Nx), which must be given for that case."""
+    if a.ndim == 4:
+        return a
+    if a.ndim == 2:
+        if legacy_shape is None:
+            raise SystemExit("%s is flat %s and no --shape Nt,Ny,Nx was given" % (name, a.shape))
+        Nt, Ny, Nx = legacy_shape
+        if Nt * Ny * Nx != a.shape[0]:
+            raise SystemExit("--shape %dx%dx%d = %d != %s rows %d in the file"
+                             % (Nt, Ny, Nx, Nt * Ny * Nx, name, a.shape[0]))
+        return a.reshape(Nt, Ny, Nx, a.shape[-1])
+    raise SystemExit("%s has unexpected ndim %d (want 4-D cube or 2-D flat)" % (name, a.ndim))
+
+
 # ----------------------------------------------------------------------- main
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--npz", default=DEFAULT_NPZ, help="packed obs/fits/params .npz")
-    ap.add_argument("--shape", default="32,116,130", help="Nt,Ny,Nx (default: full MiHI FOV)")
+    ap.add_argument("--shape", default="32,116,130",
+                    help="Nt,Ny,Nx -- only for legacy flat (t*y*x,...) files; "
+                         "ignored when the .npz already stores full cubes")
     ap.add_argument("--outdir", default=HERE, help="where to write the videos (default: this folder)")
     ap.add_argument("--prefix", default="inversion", help="output filename prefix")
     ap.add_argument("--fps", type=float, default=6.0)
@@ -128,17 +153,26 @@ def main():
                     help="matplotlib colour shown through fully-faded pixels (alpha mode)")
     args = ap.parse_args()
 
-    Nt, Ny, Nx = (int(v) for v in args.shape.split(","))
+    legacy_shape = tuple(int(v) for v in args.shape.split(",")) if args.shape else None
     f = np.load(args.npz, allow_pickle=True)
-    obs, fits, params = f["obs"], f["fits"], f["params"]
-    N, L = obs.shape
-    if Nt * Ny * Nx != N:
-        raise SystemExit("shape %dx%dx%d = %d != N=%d in %s"
-                         % (Nt, Ny, Nx, Nt * Ny * Nx, N, args.npz))
-    obs = obs.reshape(Nt, Ny, Nx, L)
-    fits = fits.reshape(Nt, Ny, Nx, L)
-    params = params.reshape(Nt, Ny, Nx, 10)
-    print("loaded %s | obs/fits %s | params %s" % (args.npz, obs.shape, params.shape))
+
+    # shape comes straight from the params cube; obs/fits only loaded if we render them
+    # (they are the big arrays -- skip the read entirely in --params-only mode)
+    params = to_cube(f["params"], "params", legacy_shape)
+    Nt, Ny, Nx = params.shape[:3]
+
+    obs = fits = None
+    L = None
+    if not args.params_only:
+        obs = to_cube(f["obs"], "obs", legacy_shape)
+        fits = to_cube(f["fits"], "fits", legacy_shape)
+        if obs.shape[:3] != (Nt, Ny, Nx) or fits.shape[:3] != (Nt, Ny, Nx):
+            raise SystemExit("obs/fits grid %s / %s != params grid %s"
+                             % (obs.shape[:3], fits.shape[:3], (Nt, Ny, Nx)))
+        L = obs.shape[-1]
+    print("loaded %s | grid Nt=%d Ny=%d Nx=%d | params %s%s"
+          % (args.npz, Nt, Ny, Nx, params.shape,
+             "" if obs is None else " | obs/fits L=%d" % L))
 
     os.makedirs(args.outdir, exist_ok=True)
     plo, phi = args.pct, 100.0 - args.pct

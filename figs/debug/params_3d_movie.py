@@ -106,6 +106,25 @@ def thread_flow(a, b, winsize):
     return cv2.GaussianBlur(flow, (0, 0), 2.0)
 
 
+def to_cube(a, name, legacy_shape):
+    """Return array a as (Nt, Ny, Nx, C) -- same contract as npz_inversion_videos.to_cube.
+
+    Modern files already store 4-D cubes -> passed straight through and the shape is
+    taken from the file. A legacy flat (t*y*x, C) array is reshaped with legacy_shape
+    (Nt, Ny, Nx), which must be given for that case."""
+    if a.ndim == 4:
+        return a
+    if a.ndim == 2:
+        if legacy_shape is None:
+            raise SystemExit("%s is flat %s and no --shape Nt,Ny,Nx was given" % (name, a.shape))
+        Nt, Ny, Nx = legacy_shape
+        if Nt * Ny * Nx != a.shape[0]:
+            raise SystemExit("--shape %dx%dx%d = %d != %s rows %d in the file"
+                             % (Nt, Ny, Nx, Nt * Ny * Nx, name, a.shape[0]))
+        return a.reshape(Nt, Ny, Nx, a.shape[-1])
+    raise SystemExit("%s has unexpected ndim %d (want 4-D cube or 2-D flat)" % (name, a.ndim))
+
+
 _VIGNETTE_CACHE = {}
 
 
@@ -156,7 +175,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--npz", default=DEFAULT_NPZ, help="packed obs/fits/params .npz")
-    ap.add_argument("--shape", default="32,116,130", help="Nt,Ny,Nx (default: full MiHI FOV)")
+    ap.add_argument("--shape", default="32,116,130",
+                    help="Nt,Ny,Nx -- only for legacy flat (t*y*x,...) files; "
+                         "ignored when the .npz already stores full cubes")
     ap.add_argument("--outdir", default=HERE, help="where to write the movie (default: this folder)")
     ap.add_argument("--prefix", default="inversion", help="output filename prefix -> <prefix>_3d.mp4")
     ap.add_argument("--fps", type=float, default=15.0)
@@ -202,14 +223,10 @@ def main():
             args.bob_deg = 6.0
         args.light = False                   # flashy is always dark
 
-    Nt, Ny, Nx = (int(v) for v in args.shape.split(","))
+    legacy_shape = tuple(int(v) for v in args.shape.split(",")) if args.shape else None
     f = np.load(args.npz, allow_pickle=True)
-    params = f["params"]
-    N = params.shape[0]
-    if Nt * Ny * Nx != N:
-        raise SystemExit("shape %dx%dx%d = %d != N=%d in %s"
-                         % (Nt, Ny, Nx, Nt * Ny * Nx, N, args.npz))
-    params = params.reshape(Nt, Ny, Nx, params.shape[-1])
+    params = to_cube(f["params"], "params", legacy_shape)
+    Nt, Ny, Nx = params.shape[:3]
     print("loaded %s | params %s" % (args.npz, params.shape))
 
     # per-cloud fields over time: (2, Nt, Ny, Nx)

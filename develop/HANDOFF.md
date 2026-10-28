@@ -4,6 +4,43 @@ H-alpha filament inversion: model = fitted PCA background + two clouds, per
 `develop/instructions.md`. Workflow: a half-page `step_N_outline.pdf` is reviewed
 before coding each step.
 
+## CURRENT STATUS (2026-10-28) — read this first
+Active work is the **given-background line** (steps 3a/4a/5a, section below), on branch
+`develop/step-5a-fullcube-and-tooling` (pushed, **not merged** to `main`; last commit fb3f61f).
+- **Committed:** 3a/4a/5a + flexible PINN head; 5a velocity-collapse diagnosis and fix
+  (global `W_REG` knob); 5a scaled to the full 32-frame cube; `step_5a_reg_scan.py`,
+  `step_6a_reg_fit.py`; inversion movies in `../figs/debug/`.
+- **Uncommitted (2026-08-28), `step_5a_reg_test.ipynb`:** scaled to **64 frames**
+  (`T0=32, N_T=64, SIGMA_T=32` → 116×130×64 = 965,120 px) with stiffer reg (S `w_xy` 1→5,
+  `w_hi` 1e-2→1e-1; dtau/vlos hinge `w_lo/w_hi` 1e-2→1e-1); `W_REG=1e-4`, 3000 iters.
+  Result χ² **0.30** / RMS **4.13 %** (32-frame run: 0.233 / 3.67 %) — not yet converged /
+  re-tuned at this size. The npz save now writes 4-D `(t,y,x,·)` cubes; an HDF5 export cell
+  is stubbed (`# not yet`).
+- **Fixed 2026-10-28 (uncommitted):**
+  1. Notebook save cell reshaped `(Nt, Cx, Cy, -1)` but the flatten order is `(Nt, Cy, Cx)`,
+     so the Aug-28 npz held row-scrambled images (a reshape, not a transpose). Cell now uses
+     `(Nt, Cy, Cx, -1)`. The file on disk was **recovered in place** (pure relabelling
+     `(64,130,116,·)` → `(64,116,130,·)`) and verified bit-exact against the raw cube
+     (`obs == raw[t, 15:-15, 15:-15, 100:500] / Iqs` for t = 0, 17, 40, 63).
+  2. `../figs/debug/params_3d_movie.py` now reads 4-D npz cubes (ported `to_cube` from
+     `npz_inversion_videos.py`; `--shape` only for legacy flat files).
+- **Current inversion product:** `/dat/milic/MiHI_filament/inv_results/fits_and_params.npz`
+  = the 64-frame run (frames 0–63), `obs`/`fits` `(64,116,130,400)`, `params`
+  `(64,116,130,10)`, canonical columns `[S,dtau,vlos,dv,loga]×2`. The 32-frame npz no
+  longer exists (overwritten Aug 28).
+- **Videos** (all in `../figs/debug/`, regenerated 2026-10-28 from the 64-frame run):
+  `inversion_tauw_params.mp4` (`npz_inversion_videos.py --params-only --tau-weight-vlos
+  --prefix inversion_tauw`), `inversion_fits.mp4` + `inversion_params.mp4` (defaults),
+  `fit_images.mp4` / `fit_spectra.mp4` / `pinn_param_maps.mp4` (`png_to_video.py --fps 6`
+  over the notebook's `{0..63}_step_5a_pinn_*.png`), `inversion_3d.mp4` +
+  `inversion_3d_flashy.mp4` (`params_3d_movie.py [--flashy]`).
+- **Next:** (a) converge/re-tune the 64-frame run (more iters; the stiffer reg costs χ²);
+  (b) the HDF5 export, if wanted; (c) the deferred **step-6 integration**: wire
+  `background_mode` (fit/given) + the flexible head through `fit_cube.py`. Optional: relax
+  the strict `S` transform to positivity-only (step-5 parity). Also check the
+  `composite_model.py` `_CLOUD_INIT` fallback: it carries an asymmetric −50/0 experiment
+  (the PINN init is separate, ∓20).
+
 ## Where we are (steps 1–6 built)
 - **Step 1** `pca_background.py` — `PCABackground`: global all-pixel PCA of the last
   10 raw frames; **K=6**. `fit_background_basis`, `.reconstruct(c)`, `.project(spec)`.
@@ -60,10 +97,37 @@ carry the core absorption. Background is now a **mode**: `fit` (PCA) ↔ `given`
   core-fill degeneracy steps 5–6 fought (no `no_emission` / anchor needed). **Limit:** off
   the line core the fit reverts to the fixed background (the clouds only touch λ near their
   velocity), so the wings are background-limited — by design, not a bug.
+- **5a velocity collapse — diagnosed and fixed** (`docs/step_5a_debug.pdf`,
+  `docs/step_5a_factorial.pdf`). The first 5a fits pinned both clouds to a flat ∓22 km/s
+  pair (stuck at the ∓20 init). A 2×2 test (σ_xy 12 vs 32 × reg off/on) showed the
+  **explicit reg itself** causes it: only ~1–2 % of the loss, it still dominates the
+  weakly data-constrained `vlos` direction. Reg off gives structured sign-crossing `vlos`
+  but runaway tails (vlos → −226). Fix: the PINN init stays symmetric (`vlos ∓20`, scale 20)
+  and one global knob **`W_REG`** scales all reg weights (thresholds unchanged).
+  `W_REG ≈ 1e-3` (64² crop) reproduces 4a quality with reg as a gentle backstop. There is
+  **no strong-reg sweet spot**: reg trades monotonically against χ² *and* velocity
+  structure (vlos2 collapses first, vlos1 loses sign-crossing by ~3e-3, spoiled ≥ 1e-2).
+- **Scripts:** `step_5a_reg_scan.py` sweeps `W_REG` → `step_5a_reg_scan_out/`.
+  `step_6a_reg_fit.py` is a scripted twin of notebook 5a in the `fit_cube.py` style
+  (`DEFAULT_CFG`, `--config`, `--set k.v=VAL`, `--dump-config`, logs `config_used.json`;
+  default out `step_6a_out/`, figures prefixed `step_6a_`).
+- **Full-cube 5a** (committed, 274eaa6): `T0=16, N_T=32, CROP=None` → 116×130×32 =
+  482,560 px, `N_FREQ=128`, minibatch 16384, `LR=1e-2`, 3000 iters (~116 s on GPU),
+  `W_REG=1e-4` with re-tuned per-group `REG` → χ² 0.233 / RMS 3.67 %, structured
+  sign-crossing velocities. Per-frame PNGs → `../figs/debug/`; final cell writes
+  `/dat/milic/MiHI_filament/inv_results/fits_and_params.npz` (obs/fits/params). Summary:
+  `docs/step_5a_session_summary.pdf`. (Since then extended to 64 frames, uncommitted — see
+  CURRENT STATUS.)
+- **Movies** (`../figs/debug/`, `.py`/`.md` committed, `.mp4` not):
+  `npz_inversion_videos.py` (obs/fit/param movies from the npz, tau-weighted vlos panels);
+  `params_3d_movie.py` (PPV point-cloud movie; default scientific, `--flashy` presentation;
+  needs `cv2` → use the `pt` env). Notes: `params_3d_movie_NOTES.md`. Both read the npz as
+  4-D `(t,y,x,·)` cubes (legacy flat files need `--shape Nt,Ny,Nx`).
 - Outlines now in `develop/docs/` (`step_3a/4a/5a_outline.pdf`), alongside steps 1–6.
 - **Backward-compatible:** steps 4/5 notebooks and `fit_cube.py` unchanged.
 - **Deferred:** wire `background_mode` (fit/given) + the flexible head through
-  `fit_cube.py` (step-6 deployment).
+  `fit_cube.py` (step-6 deployment). Until then `step_6a_reg_fit.py` is the scripted
+  given-mode runner.
 
 ## STEP 5 RESULT — the degeneracy is broken
 Calibrated on a 12×12×2 real-data crop (full batch, 200 iters): **REG off** reproduces
